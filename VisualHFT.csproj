@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <Compile Remove="demoTradingCore\**" />
+    <Compile Remove="OxyplotBenchmark\**" />
     <Compile Remove="packages\**" />
     <Compile Remove="VisualHFT.Commons.WPF\**" />
     <Compile Remove="VisualHFT.Commons\**" />
@@ -21,6 +22,7 @@
     <Compile Remove="VisualHFT.Plugins\**" />
     <Compile Remove="VisualHFT.TriggerService.TestingFramework\**" />
     <EmbeddedResource Remove="demoTradingCore\**" />
+    <EmbeddedResource Remove="OxyplotBenchmark\**" />
     <EmbeddedResource Remove="packages\**" />
     <EmbeddedResource Remove="VisualHFT.Commons.WPF\**" />
     <EmbeddedResource Remove="VisualHFT.Commons\**" />
@@ -29,6 +31,7 @@
     <EmbeddedResource Remove="VisualHFT.Plugins\**" />
     <EmbeddedResource Remove="VisualHFT.TriggerService.TestingFramework\**" />
     <None Remove="demoTradingCore\**" />
+    <None Remove="OxyplotBenchmark\**" />
     <None Remove="packages\**" />
     <None Remove="VisualHFT.Commons.WPF\**" />
     <None Remove="VisualHFT.Commons\**" />
@@ -37,6 +40,7 @@
     <None Remove="VisualHFT.Plugins\**" />
     <None Remove="VisualHFT.TriggerService.TestingFramework\**" />
     <Page Remove="demoTradingCore\**" />
+    <Page Remove="OxyplotBenchmark\**" />
     <Page Remove="packages\**" />
     <Page Remove="VisualHFT.Commons.WPF\**" />
     <Page Remove="VisualHFT.Commons\**" />

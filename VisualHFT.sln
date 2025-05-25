@@ -61,6 +61,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OxyPlot.Wpf.Shared", "..\ox
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OxyPlot", "..\oxyplot\Source\OxyPlot\OxyPlot.csproj", "{76C85675-6AF0-509D-F457-1B8F15CA4FF0}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OxyplotBenchmark", "OxyplotBenchmark\OxyplotBenchmark.csproj", "{15C3B3F0-C8C4-4CCD-9C21-5E2F52878D90}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -163,6 +165,10 @@ Global
 		{76C85675-6AF0-509D-F457-1B8F15CA4FF0}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{76C85675-6AF0-509D-F457-1B8F15CA4FF0}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{76C85675-6AF0-509D-F457-1B8F15CA4FF0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{15C3B3F0-C8C4-4CCD-9C21-5E2F52878D90}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{15C3B3F0-C8C4-4CCD-9C21-5E2F52878D90}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{15C3B3F0-C8C4-4CCD-9C21-5E2F52878D90}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{15C3B3F0-C8C4-4CCD-9C21-5E2F52878D90}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
