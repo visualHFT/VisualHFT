@@ -8,9 +8,44 @@
     <UseWPF>true</UseWPF>
   </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="OxyPlot.Core" Version="2.2.0"/>
-    <PackageReference Include="OxyPlot.Wpf" Version="2.2.0" />
-  </ItemGroup>
+	<!-- Original OxyPlot from NuGet -->
+	<ItemGroup>
+		<PackageReference Include="OxyPlot.Core" Version="2.2.0">
+			<PrivateAssets>none</PrivateAssets>
+			<ExcludeAssets>runtime</ExcludeAssets>
+		</PackageReference>
+		<PackageReference Include="OxyPlot.Wpf" Version="2.2.0">
+			<PrivateAssets>none</PrivateAssets>
+			<ExcludeAssets>runtime</ExcludeAssets>
+		</PackageReference>
+	</ItemGroup>
+	<!-- Forked OxyPlot Project References -->
+	<ItemGroup>
+		<ProjectReference Include="..\..\oxyplot\Source\OxyPlot.Wpf\OxyPlot.Wpf.csproj">
+      <Aliases>Forked</Aliases>
+      <Private>true</Private>
+		</ProjectReference>
+		<ProjectReference Include="..\..\oxyplot\Source\OxyPlot\OxyPlot.csproj">
+			<Aliases>Forked</Aliases>
+			<Private>true</Private>
+		</ProjectReference>
+	</ItemGroup>
 
+	<!-- Forked OxyPlot Project References -->
+
+	<!-- Ensure NuGet packages are copied to a specific folder -->
+	<Target Name="CopyNuGetPackages" AfterTargets="Build">
+		<ItemGroup>
+			<NuGetBinaries Include="$(NuGetPackageRoot)oxyplot.core\2.2.0\lib\netstandard2.0\*.dll" />
+			<NuGetBinaries Include="$(NuGetPackageRoot)oxyplot.wpf\2.2.0\lib\netstandard2.0\*.dll" />
+		</ItemGroup>
+		<Copy SourceFiles="@(NuGetBinaries)" DestinationFolder="$(OutputPath)Original" />
+	</Target>
+
+	<!-- Ensure forked project output is copied to a specific folder -->
+	<Target Name="CopyForkedOutput" AfterTargets="Build">
+		<Copy SourceFiles="$(OutputPath)OxyPlot.dll;$(OutputPath)OxyPlot.Wpf.dll" DestinationFolder="$(OutputPath)Forked" />
+	</Target>
+	
+	
 </Project>

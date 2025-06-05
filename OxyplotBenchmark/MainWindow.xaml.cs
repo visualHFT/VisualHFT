@@ -38,11 +38,16 @@ namespace OxyplotBenchmark
             
             try
             {
-                var official = await Task.Run(() => BenchmarkOfficialRealTimeChart.Run(iterations, maxChartPoints));
-                lblResultsOffical.Content = official.ToString();
+                var officialBenchmark = BenchmarkFactory.CreateBenchmark(useForked: false);
+                var forkedBenchmark = BenchmarkFactory.CreateBenchmark(useForked: true);
 
-                var forked = await Task.Run(() => BenchmarkForkedRealTimeChart.Run(iterations, maxChartPoints));
-                lblResultsForked.Content = forked;
+                var officialResults = officialBenchmark.Run(iterations, maxChartPoints);
+                var forkedResults = forkedBenchmark.Run(iterations, maxChartPoints);
+
+
+                lblResultsOffical.Content = officialResults.ToString();
+
+                lblResultsForked.Content = forkedResults.ToString();
             }
             finally
             {
