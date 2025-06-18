@@ -117,7 +117,7 @@ namespace VisualHFT.ViewModel
             AggregationLevels = new ObservableCollection<Tuple<string, AggregationLevel>>();
             foreach (AggregationLevel level in Enum.GetValues(typeof(AggregationLevel)))
             {
-                if (level >= AggregationLevel.Ms10) //do not load less than 100ms. In order to save resources, we cannot go lower than 100ms (//TODO: in the future we must include lower aggregation levels)
+                //if (level >= AggregationLevel.Ms10) //do not load less than 100ms. In order to save resources, we cannot go lower than 100ms (//TODO: in the future we must include lower aggregation levels)
                     AggregationLevels.Add(new Tuple<string, AggregationLevel>(Helpers.HelperCommon.GetEnumDescription(level), level));
             }
             _aggregationLevelSelection = AggregationLevel.Ms100; //DEFAULT
@@ -449,21 +449,17 @@ namespace VisualHFT.ViewModel
             if (_MARKETDATA_AVAILABLE)
             {
                 // Perform property updates asynchronously
-                Application.Current.Dispatcher.BeginInvoke(() =>
+                lock (MTX_ORDERBOOK)
                 {
-                    lock (MTX_ORDERBOOK)
-                    {
-                        _AskTOB_SPLIT?.RaiseUIThread();
-                        _BidTOB_SPLIT?.RaiseUIThread();
+                    _AskTOB_SPLIT?.RaiseUIThread();
+                    _BidTOB_SPLIT?.RaiseUIThread();
 
 
-                        RaisePropertyChanged(nameof(MidPoint));
-                        RaisePropertyChanged(nameof(Spread));
-                        RaisePropertyChanged(nameof(LOBImbalanceValue));
+                    RaisePropertyChanged(nameof(MidPoint));
+                    RaisePropertyChanged(nameof(Spread));
+                    RaisePropertyChanged(nameof(LOBImbalanceValue));
 
-                    }
-                });
-
+                }
 
                 //This is the most expensive calls. IT will freeze the UI thread if we don't de-couple
                 lock (MTX_RealTimePricePlotModel)
