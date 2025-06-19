@@ -1,0 +1,71 @@
+﻿<Window x:Class="VisualHFT.TriggerEngine.View.TriggerSettingsView"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:VisualHFT.TriggerEngine.View"
+          xmlns:converters="clr-namespace:VisualHFT.Converters"
+          TextElement.Foreground="{DynamicResource MaterialDesignBody}"
+  TextElement.FontWeight="Regular"
+  TextElement.FontSize="15"
+  TextOptions.TextFormattingMode="Ideal" 
+  TextOptions.TextRenderingMode="Auto"      
+        Background="{DynamicResource MaterialDesignPaper}"
+        mc:Ignorable="d"
+        Title="Trigger Rules" Height="450" Width="860">
+
+    <Window.Resources>
+        <converters:InverseBoolConverter x:Key="InverseBoolConverter" />
+        <converters:BoolToStatusConverter x:Key="BoolToStatusConverter" />
+    </Window.Resources>
+    <Grid x:Name="MainGrid">
+        <Grid.RowDefinitions>
+            <RowDefinition  Height="*"/>
+            <RowDefinition Height="50"/>
+        </Grid.RowDefinitions>
+        <ListView ItemsSource="{Binding}" x:Name="lstRules" VerticalAlignment="Stretch">
+            <ListView.View>
+                <GridView>
+                    <GridViewColumn Header="Rule Name" DisplayMemberBinding="{Binding Name}" />
+                    <GridViewColumn Header="Total Conditions">
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Condition.Count}" />
+                            </DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+                    <GridViewColumn Header="Total Actions">
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Actions.Count}" />
+                            </DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+
+                    <GridViewColumn Header="Status">
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding IsEnabled, Converter={StaticResource BoolToStatusConverter}}" />
+                            </DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+                    <GridViewColumn Header="Actions">
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Content="▶"  Click="StartRule" IsEnabled="{Binding IsEnabled,Converter={StaticResource InverseBoolConverter}}"  CommandParameter="{Binding}" Margin="0, 0, 10, 0" />
+                                    <Button Content="⏹️" Click="StopRule" IsEnabled="{Binding IsEnabled}" CommandParameter="{Binding}" Margin="0, 0, 10, 0"/>
+                                    <Button Content="⚙" Click="UpdateRule"  CommandParameter="{Binding}" Margin="0, 0, 10, 0"/>
+                                    <Button Content="❌" Click="RemoveRule"  CommandParameter="{Binding}" Margin="0, 0, 10, 0"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+
+                </GridView>
+            </ListView.View>
+        </ListView>
+        <Button Grid.Row="1" VerticalAlignment="Bottom" x:Name="NewRule" Click="NewRule_Click" HorizontalAlignment="Right" Margin="10">Add New Rule</Button>
+
+    </Grid>
+</Window>

@@ -1,9 +1,11 @@
 ﻿using System;
 using System.Runtime;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
+using VisualHFT.TriggerEngine;
 
 namespace VisualHFT
 {
@@ -50,6 +52,13 @@ namespace VisualHFT
                     });
                 }
             });
+
+            Task.Run(async () =>
+            {
+                TriggerEngineService.LoadAllRules();
+                await TriggerEngineService.StartBackgroundWorkerAsync(CancellationToken.None);
+            });
+             
         }
         protected override void OnExit(ExitEventArgs e)
         {

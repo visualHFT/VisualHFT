@@ -25,8 +25,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Studies.MarketResilience", 
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "VisualHFT", "VisualHFT.csproj", "{53201298-2106-4464-9ABD-2BAD5A4C9071}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OxyPlot.Wpf", "..\oxyplot\Source\OxyPlot.Wpf\OxyPlot.Wpf.csproj", "{73E17301-BED6-4E7D-EC6C-FF19A0861039}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MarketConnectors.BitStamp", "VisualHFT.Plugins\MarketConnectors.BitStamp\MarketConnectors.BitStamp.csproj", "{F08C2C33-A296-432A-82D5-340C9FDA9F2D}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MarketConnectors.Coinbase", "VisualHFT.Plugins\MarketConnectors.Coinbase\MarketConnectors.Coinbase.csproj", "{5C47DE3D-35EB-486D-AA7B-CDF5905F31FA}"
@@ -47,15 +45,13 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Gemini.Net", "Gemini.Net", 
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Gemini.Net", "VisualHFT.Plugins\MarketConnectors.BaseDAL\Gemini.Net\Gemini.Net.csproj", "{B105D6AB-A3F8-4609-A42E-F6AE10D433F8}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VisualHFT.DataRetriever.TestingFramework", "VisualHFT.DataRetriever.TestingFramework\VisualHFT.DataRetriever.TestingFramework.csproj", "{9FA70DCE-D68C-4BC8-A73F-3A9D88A7220A}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "VisualHFT.DataRetriever.TestingFramework", "VisualHFT.DataRetriever.TestingFramework\VisualHFT.DataRetriever.TestingFramework.csproj", "{9FA70DCE-D68C-4BC8-A73F-3A9D88A7220A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Studies.L2_OTT_Ratio", "VisualHFT.Plugins\Studies.L2_OTT_Ratio\Studies.L2_OTT_Ratio.csproj", "{7F53714C-FA6B-79DA-530B-A41EDC79FE98}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Studies.L2_OTT_Ratio", "VisualHFT.Plugins\Studies.L2_OTT_Ratio\Studies.L2_OTT_Ratio.csproj", "{7F53714C-FA6B-79DA-530B-A41EDC79FE98}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Studies.MarketResilience.Test", "VisualHFT.Plugins\Studies.MarketResilience.Test\Studies.MarketResilience.Test.csproj", "{5A140A0F-94B7-4D5A-A0BE-7DAA323534BB}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Studies.MarketResilience.Test", "VisualHFT.Plugins\Studies.MarketResilience.Test\Studies.MarketResilience.Test.csproj", "{5A140A0F-94B7-4D5A-A0BE-7DAA323534BB}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OxyPlot.Wpf.Shared", "..\oxyplot\Source\OxyPlot.Wpf.Shared\OxyPlot.Wpf.Shared.csproj", "{0E271D27-8139-5EA9-4BAF-BBC9F2DD92BE}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OxyPlot", "..\oxyplot\Source\OxyPlot\OxyPlot.csproj", "{76C85675-6AF0-509D-F457-1B8F15CA4FF0}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "VisualHFT.TriggerService.TestingFramework", "VisualHFT.TriggerService.TestingFramework\VisualHFT.TriggerService.TestingFramework.csproj", "{CAE9F23B-0FC8-44D4-B8A7-F60FF29ACCDE}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -103,10 +99,6 @@ Global
 		{53201298-2106-4464-9ABD-2BAD5A4C9071}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{53201298-2106-4464-9ABD-2BAD5A4C9071}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{53201298-2106-4464-9ABD-2BAD5A4C9071}.Release|Any CPU.Build.0 = Release|Any CPU
-		{73E17301-BED6-4E7D-EC6C-FF19A0861039}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{73E17301-BED6-4E7D-EC6C-FF19A0861039}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{73E17301-BED6-4E7D-EC6C-FF19A0861039}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{73E17301-BED6-4E7D-EC6C-FF19A0861039}.Release|Any CPU.Build.0 = Release|Any CPU
 		{F08C2C33-A296-432A-82D5-340C9FDA9F2D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{F08C2C33-A296-432A-82D5-340C9FDA9F2D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F08C2C33-A296-432A-82D5-340C9FDA9F2D}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -147,14 +139,10 @@ Global
 		{5A140A0F-94B7-4D5A-A0BE-7DAA323534BB}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{5A140A0F-94B7-4D5A-A0BE-7DAA323534BB}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{5A140A0F-94B7-4D5A-A0BE-7DAA323534BB}.Release|Any CPU.Build.0 = Release|Any CPU
-		{0E271D27-8139-5EA9-4BAF-BBC9F2DD92BE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{0E271D27-8139-5EA9-4BAF-BBC9F2DD92BE}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{0E271D27-8139-5EA9-4BAF-BBC9F2DD92BE}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{0E271D27-8139-5EA9-4BAF-BBC9F2DD92BE}.Release|Any CPU.Build.0 = Release|Any CPU
-		{76C85675-6AF0-509D-F457-1B8F15CA4FF0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{76C85675-6AF0-509D-F457-1B8F15CA4FF0}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{76C85675-6AF0-509D-F457-1B8F15CA4FF0}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{76C85675-6AF0-509D-F457-1B8F15CA4FF0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CAE9F23B-0FC8-44D4-B8A7-F60FF29ACCDE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CAE9F23B-0FC8-44D4-B8A7-F60FF29ACCDE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CAE9F23B-0FC8-44D4-B8A7-F60FF29ACCDE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CAE9F23B-0FC8-44D4-B8A7-F60FF29ACCDE}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

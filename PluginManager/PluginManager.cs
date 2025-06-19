@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using VisualHFT.Commons.Helpers;
 using VisualHFT.Commons.Studies;
 using VisualHFT.DataRetriever;
+using VisualHFT.TriggerEngine;
 
 namespace VisualHFT.PluginManager
 {
@@ -72,12 +73,20 @@ namespace VisualHFT.PluginManager
                 if (plugin is IDataRetriever dataRetriever)
                     dataRetriever.StartAsync();
                 else if (plugin is IStudy study)
+                {
                     study.StartAsync();
+                    study.OnCalculated += (sender, e) =>
+                    {
+                        TriggerEngineService.RegisterMetric(plugin.GetPluginUniqueID(), plugin.Name,plugin.Settings.Provider.ProviderName,plugin.Settings.Symbol, e.Value.ToDouble(), e.Timestamp);
+
+                    };
+                }
                 else if (plugin is IMultiStudy mstudy)
                     mstudy.StartAsync();
             }
         }
 
+        
         public static void StopPlugin(IPlugin plugin)
         {
             try
@@ -92,6 +101,7 @@ namespace VisualHFT.PluginManager
                         study.StopAsync();
                     else if (plugin is IMultiStudy mstudy)
                         mstudy.StopAsync();
+
                     plugin.Status = ePluginStatus.STOPPED;
                 }
             }

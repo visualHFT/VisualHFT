@@ -12,5 +12,6 @@ namespace VisualHFT.Commons.Model
         public HelprNorificationManagerCategories Category { get; set; } // Optional: for grouping
         public HelprNorificationManagerTypes NotificationType { get; set; }
         public Exception Exception { get; set; }
+        public string PluginID { get; set; }
     }
 }

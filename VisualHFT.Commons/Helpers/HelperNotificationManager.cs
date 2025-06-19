@@ -9,11 +9,13 @@ namespace VisualHFT.Commons.Helpers
         NONE,
         CORE,
         PLUGINS,
+        TRIGGER_ENGINE,
     }
     public enum HelprNorificationManagerTypes
     {
         ERROR,
         WARNING,
+        TRIGGER_ACTION
     }
 
     public class HelperNotificationManager
@@ -35,7 +37,8 @@ namespace VisualHFT.Commons.Helpers
 
         public event EventHandler<ErrorNotificationEventArgs> NotificationAdded;
 
-        public void AddNotification(string title, string message, HelprNorificationManagerTypes notificationType, HelprNorificationManagerCategories category = HelprNorificationManagerCategories.NONE, Exception exception = null)
+        public void AddNotification(string title, string message, HelprNorificationManagerTypes notificationType,
+            HelprNorificationManagerCategories category = HelprNorificationManagerCategories.NONE, Exception exception = null, string PluginID=null)
         {
             var notification = new ErrorNotification
             {
@@ -46,7 +49,8 @@ namespace VisualHFT.Commons.Helpers
                 Timestamp = DateTime.Now,
                 IsRead = false,
                 Category = category,
-                NotificationType = notificationType
+                NotificationType = notificationType,
+                PluginID=PluginID
             };
             lock (_lock)
             {

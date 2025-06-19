@@ -78,15 +78,9 @@
                         <GridViewColumn.CellTemplate>
                             <DataTemplate>
                                 <StackPanel Orientation="Horizontal">
-                                    <Button Content="▶" 
-                                        Command="{Binding DataContext.StartPluginCommand, RelativeSource={RelativeSource FindAncestor, AncestorType=ListView}}" 
-                                        CommandParameter="{Binding}" Margin="0, 0, 10, 0" />
-                                    <Button Content="⏹️" 
-                                        Command="{Binding DataContext.StopPluginCommand, RelativeSource={RelativeSource FindAncestor, AncestorType=ListView}}" 
-                                        CommandParameter="{Binding}" Margin="0, 0, 10, 0"/>
-                                    <Button Content="⚙" 
-                                        Command="{Binding DataContext.ConfigurePluginCommand, RelativeSource={RelativeSource FindAncestor, AncestorType=ListView}}" 
-                                        CommandParameter="{Binding}" Margin="0, 0, 10, 0"/>
+                                    <Button Content="▶"  Command="{Binding DataContext.StartPluginCommand, RelativeSource={RelativeSource FindAncestor, AncestorType=ListView}}" CommandParameter="{Binding}" Margin="0, 0, 10, 0" />
+                                    <Button Content="⏹️" Command="{Binding DataContext.StopPluginCommand, RelativeSource={RelativeSource FindAncestor, AncestorType=ListView}}" CommandParameter="{Binding}" Margin="0, 0, 10, 0"/>
+                                    <Button Content="⚙" Command="{Binding DataContext.ConfigurePluginCommand, RelativeSource={RelativeSource FindAncestor, AncestorType=ListView}}" CommandParameter="{Binding}" Margin="0, 0, 10, 0"/>
                                 </StackPanel>
                             </DataTemplate>
                         </GridViewColumn.CellTemplate>

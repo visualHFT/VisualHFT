@@ -10,7 +10,7 @@ using System.Windows.Media;
 using VisualHFT.Commons.Studies;
 using VisualHFT.View;
 using System.Collections.ObjectModel;
-using System.Windows.Controls;
+using System.Windows.Controls; 
 
 namespace VisualHFT.ViewModel
 {
@@ -54,7 +54,7 @@ namespace VisualHFT.ViewModel
             _study = study;
             _tile_id = ((PluginManager.IPlugin)_study).GetPluginUniqueID();
             Title = _study.TileTitle;
-            Tooltip = _study.TileToolTip;
+            Tooltip = _study.TileToolTip; 
 
             _localModel.ValueFormatted = ".";
             _localModel.Tooltip = "Waiting for data...";
@@ -63,6 +63,8 @@ namespace VisualHFT.ViewModel
 
             OpenSettingsCommand = new RelayCommand<vmTile>(OpenSettings);
             OpenChartCommand = new RelayCommand<vmTile>(OpenChartClick);
+             
+
             uiUpdater = new UIUpdater(uiUpdaterAction, UI_UPDATE_TIME_MS);
 
             RaisePropertyChanged(nameof(SelectedSymbol));
@@ -192,13 +194,18 @@ namespace VisualHFT.ViewModel
             RaisePropertyChanged(nameof(SelectedProviderName));
         }
 
-        public ICommand OpenSettingsCommand { get; set; }
+        public ICommand OpenSettingsCommand { get; set; } 
         public ICommand OpenChartCommand { get; private set; }
 
         public string Value { get => _value; set => SetProperty(ref _value, value); }
         public string ValueTooltip { get => _valueTooltip; set => SetProperty(ref _valueTooltip, value); }
         public SolidColorBrush ValueColor { get => _valueColor; set => SetProperty(ref _valueColor, value); }
         public string Title { get => _title; set => SetProperty(ref _title, value); }
+        public string PluginID
+        {
+            get => _tile_id;
+            set => SetProperty(ref _tile_id, value); // raises PropertyChanged
+        }
         public string Tooltip { get => _tileToolTip; set => SetProperty(ref _tileToolTip, value); }
         public string SelectedSymbol
         {
@@ -293,7 +300,7 @@ namespace VisualHFT.ViewModel
             RaisePropertyChanged(nameof(SelectedProviderName));
 
         }
-
+         
         protected virtual void Dispose(bool disposing)
         {
             if (!_disposed)

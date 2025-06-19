@@ -2,7 +2,7 @@
 
   <PropertyGroup>
 	  <OutputType>WinExe</OutputType>
-	  <TargetFramework>net8.0-windows8.0</TargetFramework>
+	  <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
 	  <Nullable>enable</Nullable>
 	  <UseWPF>true</UseWPF>
 	  <ApplicationIcon>Images\VisualHFT.ico</ApplicationIcon>
@@ -188,11 +188,22 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Resource>
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Update="TriggerEngine\View\AddAPISetting.xaml.cs">
+      <SubType>Code</SubType>
+    </Compile>
+  </ItemGroup>
 	<ItemGroup>
 		<None Update="Images\VisualHFT.png">
 			<Pack>True</Pack>
 			<PackagePath>\</PackagePath>
 		</None>
+	</ItemGroup>
+	<ItemGroup>
+	  <Page Update="TriggerEngine\View\AddAPISetting.xaml">
+	    <SubType>Designer</SubType>
+	  </Page>
 	</ItemGroup>
 
 </Project>

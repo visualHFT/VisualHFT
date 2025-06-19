@@ -133,18 +133,18 @@
             </Popup>
 
         </StackPanel>
-        <DockPanel Grid.Row="0" Grid.Column="0" Grid.RowSpan="3" Margin="5" VerticalAlignment="Stretch">
+        <DockPanel Grid.Row="0" Grid.Column="0" Grid.RowSpan="3" Margin="0" VerticalAlignment="Stretch">
             <StackPanel Orientation="Vertical" DockPanel.Dock="Top">
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Top" >
 
                 </StackPanel>
-                <WrapPanel Orientation="Horizontal" Margin="20" HorizontalAlignment="Left">
+                <WrapPanel Orientation="Horizontal" Margin="0" HorizontalAlignment="Left">
                     <!-- Buttons inside a WrapPanel -->
-                    <Button Width="200" Height="50" Margin="10" Content="⛭ Settings" Background="Blue" VerticalAlignment="Top" HorizontalAlignment="Left" ToolTip="App Settings" Click="ButtonAppSettings_Click" />
-                    <!--<Button Visibility="Hidden" Width="200" Height="50" Margin="10" Background="Red" BorderBrush="White" Content="🛑 Abort" ToolTip="Abort remote system (terminate it)" Command="{Binding cmdAbort}"/>-->
-                    <Button Width="200" Height="50" Margin="10" Content="🧩Plugins Management" ToolTip="Manage VisualHFT plugins" Click="ButtonPluginManagement_Click" />
-                    <Button Width="200" Height="50" Margin="10" Content="🕵️‍♂️ Pos. Analytics" ToolTip="Positions Analytics report" Click="ButtonAnalyticsReport_Click" />
-                    <Button Width="200" Height="50" Margin="10" Content="📈 Multi Venue Prices" ToolTip="See prices from all venues at the same time." Click="ButtonMultiVenuePrices_Click" />
+                    <Button Width="200" Height="40" Margin="5 5 40 5" Content="📈 Multi Venue Prices" ToolTip="See prices from all venues at the same time." Click="ButtonMultiVenuePrices_Click" />
+                    <Button Width="60" Height="40" Margin="5" Content="⛭" ToolTip="Application Settings" FontSize="25" VerticalAlignment="Top" HorizontalAlignment="Left" Click="ButtonAppSettings_Click" />
+                    <Button Width="60" Height="40" Margin="5" Content="🧩" ToolTip="Plugins Management" FontSize="25" Click="ButtonPluginManagement_Click" />
+                    <Button Width="60" Height="40" Margin="5" Content="⚡" ToolTip="Trigger Management" FontSize="25" x:Name="triggerRules" Click="triggerRules_Click" />
+
                     <!--<Button Width="150" Height="50" Margin="10" Content="Button 4"/>
                     <Button Width="150" Height="50" Margin="10" Content="Button 5"/>
                     <Button Width="150" Height="50" Margin="10" Content="Button 6"/>-->

@@ -1,0 +1,72 @@
+﻿<Window x:Class="VisualHFT.TriggerEngine.View.AddUIAlertSetting"
+               xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:VisualHFT.TriggerEngine.View"
+        xmlns:enums="clr-namespace:VisualHFT.TriggerEngine"
+        mc:Ignorable="d"  
+TextElement.FontWeight="Regular"
+TextElement.FontSize="15"
+TextOptions.TextFormattingMode="Ideal" 
+TextOptions.TextRenderingMode="Auto"         
+      Background="{DynamicResource MaterialDesignPaper}"  
+        xmlns:sys="clr-namespace:System;assembly=mscorlib"
+      Title="Add UI Alert Setting" Height="450" Width="500">
+
+    <Window.Resources>
+        <ObjectDataProvider x:Key="TimeWindowUnitOperatorEnum"
+         MethodName="GetValues"
+         ObjectType="{x:Type sys:Enum}">
+            <ObjectDataProvider.MethodParameters>
+                <x:Type TypeName="enums:TimeWindowUnit" />
+            </ObjectDataProvider.MethodParameters>
+        </ObjectDataProvider>
+    </Window.Resources>
+    <Grid x:Name="MainGrid" Margin="10">
+
+        <StackPanel Margin="10">
+            <TextBlock Text="Trigger Rate Limit ℹ️" Style="{StaticResource MaterialDesignBody2TextBlock}" MouseEnter="ShowCooldownToolTip" Foreground="White" VerticalAlignment="Center" Margin="0,0,10,0"/>
+
+            <Popup PopupAnimation="Fade" Placement="Mouse" AllowsTransparency="True" StaysOpen="False" x:Name="CooldownToolTip" >
+                <Border Background="White" BorderBrush="Gray" CornerRadius="3" BorderThickness="1">
+                    <StackPanel Margin="10" Orientation="Horizontal" >
+                        <StackPanel>
+                            <TextBlock TextWrapping="Wrap" Width="350" Foreground="Black" FontSize="12">
+         <Run FontWeight="Bold">What is Trigger Rate Limit?</Run>
+<LineBreak />
+<LineBreak />
+<Run>This setting defines the minimum time that must pass before a specific action can be triggered again after its previous execution. </Run>
+<Run>It prevents actions (like sending emails or UI alerts) from being repeatedly triggered too quickly, ensuring a controlled frequency.</Run>
+<LineBreak/>
+<LineBreak/>
+<Run FontWeight="Bold">For example, if set to "5 seconds," the action will wait at least 5 seconds before it can be triggered again, even if the triggering condition is continuously met.</Run>
+                                    <LineBreak />
+<LineBreak />
+                            </TextBlock>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </Popup>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="0.5*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <TextBox  Grid.Column="0" x:Name="txtDuration"  Text="{Binding CooldownDuration}" Foreground="White" HorizontalAlignment="Left" MinWidth="100" />
+                <ComboBox Foreground="White" Grid.Column="1" ItemsSource="{Binding Source={StaticResource TimeWindowUnitOperatorEnum}}" SelectedItem="{Binding CooldownUnit}" HorizontalAlignment="Stretch" />
+            </Grid>
+
+
+        </StackPanel>
+        
+        <StackPanel VerticalAlignment="Bottom" Orientation="Horizontal">
+            <Button Name="Save" Margin="0,0,10,0" Click="Save_Click">Save</Button>
+            <Button Name="Cancel" Margin="0,0,10,0" Click="Cancel_Click">Cancel</Button>
+        </StackPanel>
+        
+    </Grid>
+</Window>
