@@ -100,6 +100,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\oxyplot\Source\OxyPlot.Wpf\OxyPlot.Wpf.csproj" />
+    <ProjectReference Include="..\oxyplot\Source\OxyPlot\OxyPlot.csproj" />
     <ProjectReference Include="VisualHFT.Commons.WPF\VisualHFT.Commons.WPF.csproj" />
     <ProjectReference Include="VisualHFT.Commons\VisualHFT.Commons.csproj" />
     <ProjectReference Include="VisualHFT.DataRetriever.TestingFramework\VisualHFT.DataRetriever.TestingFramework.csproj" />
