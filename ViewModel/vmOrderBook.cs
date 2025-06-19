@@ -1,4 +1,114 @@
-﻿using System;
+﻿/*
+    GOAL
+    
+    The vmOrderBook class serves as a high-performance, real-time visualization engine for limit order book data 
+    with the following key objectives:
+
+    1. Real-Time Market Data Visualization
+       - Displays continuous updates of order book data with minimal latency
+       - Visualizes multiple aspects of market microstructure:
+         * Best Bid/Ask prices (Line series)
+         * Mid price (Line series)
+         * Order book depth through scatter points
+         * Bid/Ask spread evolution
+         * Volume distribution through cumulative charts
+    
+    2. Multi-dimensional Data Representation
+       - Y-axis: Price levels of orders
+       - X-axis: Time progression
+       - Point size: Order volume at each price level
+       - Color intensity: Relative volume significance
+       - Separate visualizations for bid (green) and ask (red) sides
+    
+    3. Performance Optimization
+       - Implements memory pooling to minimize GC pressure
+       - Uses efficient data structures for real-time updates
+       - Employs lock-free operations where possible
+       - Implements smart rendering strategies to maintain UI responsiveness
+    
+    4. Flexible Data Aggregation
+       - Supports multiple time-based aggregation levels:
+         * From millisecond-level for high-frequency analysis
+         * Up to second-level for broader market view
+       - Allows dynamic switching between aggregation levels
+       - Maintains data consistency across different time scales
+    
+    5. Market Depth Analysis
+       - Visualizes complete order book depth
+       - Shows price level clustering
+       - Represents volume concentration at different price levels
+       - Tracks order book imbalances
+    
+    This visualization model is particularly suited for:
+    - High-frequency trading analysis
+    - Market microstructure research
+    - Real-time market monitoring
+    - Order flow analysis
+    - Liquidity analysis at different price levels
+*/
+
+/*
+    SEQUENCE OF EVENTS
+    1. This class receives market data subscribing to the HelperOrderBook.Instance. This is the entry point, and once subscribed, data starts arriving
+    2. Data arrives in LIMITORDERBOOK_OnDataReceived (at a rate of 10000 messages per second), decouples the incoming data and pushes it to a queue for processing. 
+       This decoupling needs to happen as efficient as possible so we avoid blocking the incoming data stream. 
+       The queue is implemented in HelperCustomQueue<OrderBookSnapshot>
+    3. The queue is processed by QUEUE_onReadAction, which adds the data to an AggregatedCollection
+       that aggregates the data based on the selected aggregation level
+    4. The AggregatedCollection raises events when data is added or removed, which are handled by _AGGREGATED_LOB_OnAdded and _AGGREGATED_LOB_OnRemoved
+    5. The _AGGREGATED_LOB_OnAdded method updates the local values, adds points to the charts series (RealTimePricePlotModel, RealTimeSpreadModel, CummulativeBidsChartModel, CummulativeAsksChartModel)
+    6. The _AGGREGATED_LOB_OnRemoved method removes the last points from the charts series, maintaining the real-time nature of the data
+    7. The uiUpdaterAction method is called periodically, by a timer, to raise the UI with the latest data from the already updated chart series
+       RealTimePricePlotModel, RealTimeSpreadModel, CummulativeBidsChartModel, CummulativeAsksChartModel
+ */
+/*
+    IMPLEMENTATION DETAILS
+    
+    KEY COMPONENTS:
+    1. Data Management & Pooling
+       - Uses CustomObjectPool<OrderBookSnapshot> to efficiently manage memory
+       - Implements pooling for List<T> and ScatterPoint objects to reduce GC pressure
+       - OrderBookSnapshotPool handles recycling of snapshots with configurable pool size
+    
+    2. UI Update & Threading Model
+       - Uses dispatcher-based UI updates with configurable refresh rate (_MIN_UI_REFRESH_TS = 60ms)
+       - Enforces minimum UI refresh interval of 60ms to maintain visual smoothness
+       - Implements thread-safe data access using multiple lock objects (MTX_*)
+       - Decouples data processing from UI updates via queue-based architecture
+    
+    3. Chart Management
+       - Maintains 4 distinct chart models:
+         * RealTimePricePlotModel: Current price movements with bid/ask visualization
+         * RealTimeSpreadModel: Spread between bid and ask prices
+         * CummulativeBidsChartModel: Depth visualization for bids
+         * CummulativeAsksChartModel: Depth visualization for asks
+       - Uses OxyPlot for efficient charting with custom series configurations
+    
+    4. Data Aggregation
+       - Implements AggregatedCollection<T> for time-based data grouping
+       - Supports multiple aggregation levels from 1ms to daily
+       - Uses custom aggregation logic in _AGGREGATED_LOB_OnAggregating
+    
+    5. Memory Management
+       - Implements IDisposable pattern for proper resource cleanup
+       - Uses object pooling for frequently allocated objects
+       - Maintains separate pools for different object types to optimize memory usage
+    
+    6. Event Handling
+       - Subscribes to market data via HelperOrderBook.Instance
+       - Handles provider status changes and symbol updates
+       - Processes trade updates separately from order book updates
+    
+    7. Performance Considerations
+       - Implements custom object pooling to reduce garbage collection
+       - Uses lock-free operations where possible
+       - Minimizes allocations in hot paths
+       - Implements efficient grid updates by reusing existing objects
+*/
+
+
+
+using System;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -439,6 +549,10 @@ namespace VisualHFT.ViewModel
             CummulativeBidsChartModel.Series.Add(areaSpreadSeriesBids);
             CummulativeAsksChartModel.Series.Add(areaSpreadSeriesAsks);
         }
+
+
+
+
         private void uiUpdaterAction()
         {
             if (_selectedProvider == null || string.IsNullOrEmpty(_selectedSymbol))
