@@ -290,16 +290,15 @@
                     </ToolTip>
                 </Grid.ToolTip>
 
-                <oxyplot:PlotView 
+                <oxyplot:Direct2DPlotView 
                     x:Name="chtPrice" 
                     Visibility="Visible"
                     HorizontalAlignment="Stretch" VerticalAlignment="Stretch" 
                     IsEnabled="False"
                     IsMouseWheelEnabled="False" 
-                    TextMeasurementMethod="GlyphTypeface"
-                    Style="{StaticResource BaseChartStyle}" 
+                    Style="{StaticResource BaseChartStyleGPU}" 
                     Model="{Binding RealTimePricePlotModel, Mode=OneWay}" >
-                </oxyplot:PlotView>
+                </oxyplot:Direct2DPlotView>
 
 
             </Grid>

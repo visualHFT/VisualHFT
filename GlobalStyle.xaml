@@ -10,7 +10,10 @@
         <Setter Property="Foreground" Value="{DynamicResource MaterialDesignBody}" />
 
     </Style>
-
+    <Style x:Key="BaseChartStyleGPU" TargetType="{x:Type oxyplot:Direct2DPlotView}">
+        <Setter Property="Background" Value="{DynamicResource MaterialDesignPaper}" />
+        <Setter Property="Foreground" Value="{DynamicResource MaterialDesignBody}" />
+    </Style>
 
 
 

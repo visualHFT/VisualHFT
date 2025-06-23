@@ -112,22 +112,23 @@
     * When chart component redraws the scatter series, it will redraw point by point, re-creating the entire plot.
  */
 
+using OxyPlot;
+using OxyPlot.Axes;
+using OxyPlot.Series;
+using Prism.Mvvm;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Windows;
 using System.Windows.Threading;
+using VisualHFT.Commons.Helpers;
+using VisualHFT.Commons.Model;
+using VisualHFT.Commons.Pools;
+using VisualHFT.Enums;
 using VisualHFT.Helpers;
 using VisualHFT.Model;
-using OxyPlot;
-using OxyPlot.Axes;
-using VisualHFT.Commons.Pools;
 using AxisPosition = OxyPlot.Axes.AxisPosition;
-using Prism.Mvvm;
-using VisualHFT.Commons.Helpers;
-using VisualHFT.Enums;
-using VisualHFT.Commons.Model;
 
 
 namespace VisualHFT.ViewModel
@@ -276,6 +277,7 @@ namespace VisualHFT.ViewModel
             RealTimePricePlotModel.PlotAreaBorderColor = OxyColors.White;
             RealTimePricePlotModel.PlotAreaBorderThickness = new OxyThickness(0);
             RealTimePricePlotModel.EdgeRenderingMode = EdgeRenderingMode.PreferSpeed;
+            RealTimePricePlotModel.Background = OxyColors.White;
             var xAxis = new OxyPlot.Axes.DateTimeAxis()
             {
                 Position = AxisPosition.Bottom,
@@ -364,30 +366,28 @@ namespace VisualHFT.ViewModel
                 EdgeRenderingMode = EdgeRenderingMode.PreferSpeed,
             };
             //SCATTER SERIES
-            var scatterAsks = new OxyPlot.Series.ScatterSeries
+            var scatterAsks = new OxyPlot.Series.GPUScatterSeries<ScatterPoint>
             {
                 Title = "ScatterAsks",
                 ColorAxisKey = "RedColorAxis",
                 MarkerType = MarkerType.Circle,
                 MarkerStrokeThickness = 0,
-                //MarkerStroke = OxyColors.DarkRed,
-                MarkerStroke = OxyColors.Transparent,
-                //MarkerFill = OxyColor.Parse("#80FF0000"),
+                MarkerStroke = OxyColors.DarkRed,
+                MarkerFill = OxyColor.Parse("#80FF0000"),
                 MarkerSize = 10,
                 RenderInLegend = false,
                 Selectable = false,
                 EdgeRenderingMode = EdgeRenderingMode.PreferSpeed,
                 BinSize = 10 //smoothing the draw for speed performance
             };
-            var scatterBids = new OxyPlot.Series.ScatterSeries
+            var scatterBids = new OxyPlot.Series.GPUScatterSeries<ScatterPoint>
             {
                 Title = "ScatterBids",
                 ColorAxisKey = "GreenColorAxis",
                 MarkerType = MarkerType.Circle,
-                MarkerStroke = OxyColors.Transparent,
-                //MarkerStroke = OxyColors.Green,
+                MarkerStroke = OxyColors.Green,
                 MarkerStrokeThickness = 0,
-                //MarkerFill = OxyColor.Parse("#8000FF00"),
+                MarkerFill = OxyColor.Parse("#8000FF00"),
                 MarkerSize = 10,
                 RenderInLegend = false,
                 Selectable = false,
@@ -874,6 +874,24 @@ namespace VisualHFT.ViewModel
                     else if (serie.Title == "Bid" && bidPricePoint != null)
                         _serie.Points.Add(bidPricePoint.Value);
                 }
+                else if (serie is OxyPlot.Series.GPUScatterSeries<ScatterPoint> _FastScatter)
+                {
+                    if (_FastScatter.ColorAxis is LinearColorAxis colorAxis)
+                    {
+                        //we have defined min/max when normalizing the Size in "GenerateSinglePoint_RealTimePrice" method.
+                        colorAxis.Minimum = 1;
+                        colorAxis.Maximum = 10;
+                    }
+                    if (serie.Title == "ScatterAsks" && askLevelPoints != null)
+                    {
+                        _FastScatter.Points.AddRange(askLevelPoints);
+                    }
+                    else if (serie.Title == "ScatterBids" && bidLevelPoints != null)
+                    {
+                        _FastScatter.Points.AddRange(bidLevelPoints);
+                    }
+
+                }
                 else if (serie is OxyPlot.Series.ScatterSeries _scatter)
                 {
                     if (_scatter.ColorAxis is LinearColorAxis colorAxis)
@@ -944,7 +962,26 @@ namespace VisualHFT.ViewModel
                 return;
             foreach (var serie in RealTimePricePlotModel.Series)
             {
-                if (serie is OxyPlot.Series.ScatterSeries _scatter)
+                if (serie is OxyPlot.Series.GPUScatterSeries<ScatterPoint> _fastScatter)
+                {
+                    if (serie.Title == "ScatterAsks")
+                    {
+                        while (_fastScatter.Points[0].X == tsToRemove)
+                        {
+                            _objectPool_ScatterPoint.Return(_fastScatter.Points[0]);
+                            _fastScatter.Points.RemoveAt(0);
+                        }
+                    }
+                    else if (serie.Title == "ScatterBids")
+                    {
+                        while (_fastScatter.Points[0].X == tsToRemove)
+                        {
+                            _objectPool_ScatterPoint.Return(_fastScatter.Points[0]);
+                            _fastScatter.Points.RemoveAt(0);
+                        }
+                    }
+                }
+                else if (serie is OxyPlot.Series.ScatterSeries _scatter)
                 {
                     if (serie.Title == "ScatterAsks")
                     {
@@ -989,6 +1026,8 @@ namespace VisualHFT.ViewModel
                     .ForEach(x => x.Points.Clear());
                 RealTimePricePlotModel?.Series.OfType<OxyPlot.Series.ScatterSeries>().ToList()
                     .ForEach(x => x.Points.Clear());
+                RealTimePricePlotModel?.Series.OfType<OxyPlot.Series.GPUScatterSeries<ScatterPoint>>().ToList()
+                   .ForEach(x => x.Points.Clear());
                 _bidsGrid.Clear();
                 _asksGrid.Clear();
             }
