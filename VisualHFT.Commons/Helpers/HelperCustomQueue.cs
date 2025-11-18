@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using VisualHFT.Commons.Pools;
+using VisualHFT.Helpers;
 
 public class HelperCustomQueue<T> : IDisposable
 {
@@ -18,6 +20,11 @@ public class HelperCustomQueue<T> : IDisposable
     private bool _disposed;
     private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
+    // Depth thresholds for unbounded queue health monitoring
+    private readonly int _healthyThreshold;
+    private readonly int _warningThreshold;
+    private readonly bool _isBounded;
+
     #region Ultra-Lean Performance Monitoring
 
     private readonly bool _monitorHealth = false; // Set to true to enable performance monitoring
@@ -34,9 +41,14 @@ public class HelperCustomQueue<T> : IDisposable
 
 
     // Public read-only properties for monitoring
+    public string QueueName => _queueName;
+    public int Count => CurrentQueueDepth;   // Implement the IQuantifiable interface
     public long TotalMessagesAdded => _totalMessagesAdded;
     public long TotalMessagesProcessed => _totalMessagesProcessed;
-    public int CurrentQueueDepth => _queue?.Count ?? 0;
+    public int CurrentQueueDepth => _disposed ? 0 : (_queue?.Count ?? 0);
+    public bool IsBounded => _isBounded;
+    public int HealthyThreshold => _healthyThreshold;
+    public int WarningThreshold => _warningThreshold;
     public double AverageProcessingTimeMicroseconds
     {
         get
@@ -48,12 +60,15 @@ public class HelperCustomQueue<T> : IDisposable
 
     #endregion
 
-    public HelperCustomQueue(string queueName, Action<T> actionOnRead, Action<Exception> onError = null, bool monitorHealth = false)
+    public HelperCustomQueue(string queueName, Action<T> actionOnRead, Action<Exception> onError = null, bool monitorHealth = false, int healthyThreshold = 1000, int warningThreshold = 10000)
     {
         _queueName = queueName;
         _actionOnRead = actionOnRead;
         _onError = onError;
-        _queue = new BlockingCollection<T>();
+        _queue = new BlockingCollection<T>();  // Unbounded queue
+        _isBounded = false;  // This is an unbounded queue
+        _healthyThreshold = healthyThreshold;
+        _warningThreshold = warningThreshold;
         _resetEvent = new ManualResetEventSlim(false);
         _cts = new CancellationTokenSource();
         _token = _cts.Token;
@@ -64,8 +79,36 @@ public class HelperCustomQueue<T> : IDisposable
             var evt = (ManualResetEventSlim)s!;
             evt.Set(); // Wake up waiters when canceled
         }, _resetEvent);
+        if (_queueName == null)
+            _queueName = GetInstantiator();
 
         Start();
+    }
+    private static string GetInstantiator()
+    {
+        try
+        {
+            var stackTrace = new StackTrace();
+            var frames = stackTrace.GetFrames();
+
+            // Skip the first frame (this method) and the constructor frame
+            // Look for the first frame that's not in this class
+            for (int i = 2; i < frames.Length; i++)
+            {
+                var method = frames[i].GetMethod();
+                if (method?.DeclaringType != null && method.DeclaringType != typeof(HelperCustomQueue<T>))
+                {
+                    var declaringType = method.DeclaringType;
+                    return $"{declaringType.Namespace}.{declaringType.Name}";
+                }
+            }
+
+            return "Unknown";
+        }
+        catch
+        {
+            return "Unknown";
+        }
     }
 
     public void Add(T item)

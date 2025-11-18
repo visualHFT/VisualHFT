@@ -6,6 +6,9 @@ namespace VisualHFT.Model
 {
     public partial class Provider
     {
+        private string _cachedTooltip;
+        private eSESSIONSTATUS _lastTooltipStatus;
+
         public int ProviderID
         {
             get { return this.ProviderCode; }
@@ -20,35 +23,46 @@ namespace VisualHFT.Model
         {
             get
             {
-                string lastNotificationText = "";
-                try
+                // Cache tooltip to avoid repeated queries to notification manager
+                if (_lastTooltipStatus != Status || string.IsNullOrEmpty(_cachedTooltip))
                 {
-                    var lastNonReadNotification = HelperNotificationManager.Instance.GetAllNotifications()
-                        .OrderByDescending(x => x.Timestamp)
-                        .ThenBy(x => x.NotificationType)
-                        .FirstOrDefault(x => x.Title.IndexOf(this.ProviderName) > -1);
-                    if (lastNonReadNotification != null)
-                        lastNotificationText = lastNonReadNotification.Title + " " + lastNonReadNotification.Message;
+                    _cachedTooltip = GenerateTooltip();
+                    _lastTooltipStatus = Status;
                 }
-                catch (Exception ex)
-                {
-                    lastNotificationText = "[[Err reading notifications]]" + ex.ToString();
-                }
-
-                if (Status == eSESSIONSTATUS.CONNECTING)
-                    return "Connecting...";
-                if (Status == eSESSIONSTATUS.CONNECTED)
-                    return "Connected";
-                if (Status == eSESSIONSTATUS.CONNECTED_WITH_WARNINGS)
-                    return "Connected with limitations" + (string.IsNullOrEmpty(lastNotificationText) ? "" : $": ({lastNotificationText})");
-                if (Status == eSESSIONSTATUS.DISCONNECTED_FAILED)
-                    return "Failure Disconnection" + (string.IsNullOrEmpty(lastNotificationText) ? "" : $": ({lastNotificationText})");
-                if (Status == eSESSIONSTATUS.DISCONNECTED)
-                    return "Disconnected";
-
-
-                return "";
+                return _cachedTooltip;
             }
+        }
+
+        private string GenerateTooltip()
+        {
+            string lastNotificationText = "";
+            try
+            {
+                var lastNonReadNotification = HelperNotificationManager.Instance.GetAllNotifications()
+                    .OrderByDescending(x => x.Timestamp)
+                    .ThenBy(x => x.NotificationType)
+                    .FirstOrDefault(x => x.Title.IndexOf(this.ProviderName) > -1);
+                if (lastNonReadNotification != null)
+                    lastNotificationText = lastNonReadNotification.Title + " " + lastNonReadNotification.Message;
+            }
+            catch (Exception ex)
+            {
+                lastNotificationText = "[[Err reading notifications]]" + ex.ToString();
+            }
+
+            if (Status == eSESSIONSTATUS.CONNECTING)
+                return "Connecting...";
+            if (Status == eSESSIONSTATUS.CONNECTED)
+                return "Connected";
+            if (Status == eSESSIONSTATUS.CONNECTED_WITH_WARNINGS)
+                return "Connected with limitations" + (string.IsNullOrEmpty(lastNotificationText) ? "" : $": ({lastNotificationText})");
+            if (Status == eSESSIONSTATUS.DISCONNECTED_FAILED)
+                return "Failure Disconnection" + (string.IsNullOrEmpty(lastNotificationText) ? "" : $": ({lastNotificationText})");
+            if (Status == eSESSIONSTATUS.DISCONNECTED)
+                return "Disconnected";
+
+
+            return "";
         }
 
         [JsonIgnore]
