@@ -99,7 +99,10 @@ namespace VisualHFT.Commons.Model
             this.SizeDecimalPlaces = master.SizeDecimalPlaces;
             this.MaxDepth = master.MaxDepth;
             this.ImbalanceValue = master.ImbalanceValue;
-            LastUpdated = HelperTimeProvider.Now;
+            if (master.LastUpdated.HasValue)
+                this.LastUpdated = master.LastUpdated.Value;
+            else
+                this.LastUpdated = HelperTimeProvider.Now;
 
             CopyBookItems(master.Asks, _asks);
             CopyBookItems(master.Bids, _bids);

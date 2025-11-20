@@ -147,6 +147,36 @@ namespace VisualHFT.Model
             set => _data.Bids.Update(value); //do not remove setter: it is used to auto parse json
         }
 
+        /// <summary>
+        /// Creates a thread-safe snapshot of bids/asks for validation.
+        /// </summary>
+        public BookItem[] GetBidsSnapshot()
+        {
+            lock (_data.Lock)
+            {
+                if (_data.Bids == null)
+                    return Array.Empty<BookItem>();
+
+                if (MaxDepth > 0 && FilterBidAskByMaxDepth)
+                    return _data.Bids.Take(MaxDepth).ToArray();
+                else
+                    return _data.Bids.ToArray();
+            }
+        }
+        public BookItem[] GetAsksSnapshot()
+        {
+            lock (_data.Lock)
+            {
+                if (_data.Asks == null)
+                    return Array.Empty<BookItem>();
+
+                if (MaxDepth > 0 && FilterBidAskByMaxDepth)
+                    return _data.Asks.Take(MaxDepth).ToArray();
+                else
+                    return _data.Asks.ToArray();
+            }
+        }
+
         public BookItem GetTOB(bool isBid)
         {
             lock (_data.Lock)
