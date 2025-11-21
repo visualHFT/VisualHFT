@@ -9,7 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="CryptoExchange.Net" Version="9.13.0" />
-    <PackageReference Include="JKorf.Coinbase.Net" Version="2.11.1" />
+    <PackageReference Include="JKorf.Coinbase.Net" Version="2.11.2" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
 
