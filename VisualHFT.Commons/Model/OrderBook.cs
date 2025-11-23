@@ -622,11 +622,21 @@ namespace VisualHFT.Model
 
                 if (!string.IsNullOrEmpty(item.EntryID))
                 {
+                    if (item.IsBid.HasValue && item.IsBid.Value && _data.Bids == null)
+                        return;
+                    if (item.IsBid.HasValue && !item.IsBid.Value && _data.Asks == null)
+                        return;
+
                     _itemToDelete = (item.IsBid.HasValue && item.IsBid.Value ? _data.Bids : _data.Asks)
                         .FirstOrDefault(x => x.EntryID == item.EntryID);
                 }
                 else if (item.Price.HasValue && item.Price > 0)
                 {
+                    if (item.IsBid.HasValue && item.IsBid.Value && _data.Bids == null)
+                        return;
+                    if (item.IsBid.HasValue && !item.IsBid.Value && _data.Asks == null)
+                        return;
+
                     _itemToDelete = (item.IsBid.HasValue && item.IsBid.Value ? _data.Bids : _data.Asks)
                         .FirstOrDefault(x => x.Price == item.Price);
                 }

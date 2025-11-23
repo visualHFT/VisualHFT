@@ -209,7 +209,7 @@ namespace VisualHFT.Commons.PluginManager
             _internalStartAsync = internalStartAsync;
         }
 
-        private bool _isReconnecting = false;
+        protected bool _isReconnecting = false;
         protected async Task HandleConnectionLost(string reason = null, Exception exception = null, bool forceStartRegardlessStatus = false)
         {
             if (_isReconnecting)
