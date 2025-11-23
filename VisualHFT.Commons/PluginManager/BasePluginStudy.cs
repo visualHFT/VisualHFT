@@ -75,7 +75,8 @@ namespace VisualHFT.Commons.PluginManager
             if (Settings == null)
                 throw new InvalidOperationException($"{Name} plugin settings has not been loaded.");
             HelperProvider.Instance.OnStatusChanged += Provider_OnStatusChanged;
-            HelperOrderBook.Instance.OnException += HelperOrderBookInstance_OnException; ; //subscribe and hear for exceptions on this Plugin
+            HelperProvider.Instance.OnProviderStale += Provider_OnProviderStale; //when no data for 30 seconds is received.
+            HelperOrderBook.Instance.OnException += HelperOrderBookInstance_OnException;//subscribe and hear for exceptions on this Plugin
             Status = ePluginStatus.LOADED;
         }
 
@@ -264,7 +265,20 @@ namespace VisualHFT.Commons.PluginManager
                 }
             }
         }
-
+        private void Provider_OnProviderStale(object? sender, Provider e)
+        {
+            if (Settings?.Provider?.ProviderCode == e.ProviderID)
+            {
+                // Send "stale data" indicator to UI
+                AddCalculation(new BaseStudyModel()
+                {
+                    ValueFormatted = "...",
+                    Timestamp = HelperTimeProvider.Now,
+                    Tooltip = $"{e.ProviderName} is stale - no data for 30+ seconds",
+                    ValueColor = "Orange", // Different from "Red" (error)
+                });
+            }
+        }
 
         /// <summary>
         /// Adds the calculation.
@@ -351,6 +365,7 @@ namespace VisualHFT.Commons.PluginManager
             {
                 _disposed = true;
                 HelperProvider.Instance.OnStatusChanged -= Provider_OnStatusChanged;
+                HelperProvider.Instance.OnProviderStale -= Provider_OnProviderStale;
                 HelperOrderBook.Instance.OnException -= HelperOrderBookInstance_OnException; ; //subscribe and hear for exceptions on this Plugin
 
                 _QUEUE?.Dispose();
