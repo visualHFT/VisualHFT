@@ -16,6 +16,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using VisualHFT.Commons.Helpers;
@@ -709,7 +710,11 @@ namespace MarketConnectors.KuCoin
                 {
                     lock (_buffersLock)
                     {
-                        _eventBuffers[symbol]?.PauseConsumer(); // CRITICAL to allow stop
+                        if (_eventBuffers.ContainsKey(symbol))
+                        {
+                            _eventBuffers[symbol]?.PauseConsumer(); // CRITICAL to allow stop
+                            _eventBuffers[symbol]?.Clear(); // Clear buffer to avoid processing stale deltas
+                        }
                     }
                     throw new Exception("Detected sequence gap.");
                 }
@@ -718,6 +723,9 @@ namespace MarketConnectors.KuCoin
                 {
                     foreach (var item in lob_update.Changes.Bids)
                     {
+                        if (item.Quantity == 0 && item.Price == 0)
+                            continue;
+
                         var delta = DeltaBookItemPool.Get(); // ✅ Get from pool
                         try
                         {
@@ -742,6 +750,8 @@ namespace MarketConnectors.KuCoin
 
                     foreach (var item in lob_update.Changes.Asks)
                     {
+                        if (item.Quantity == 0 && item.Price == 0)
+                            continue;
                         var delta = DeltaBookItemPool.Get(); // ✅ Get from pool
                         try
                         {
@@ -768,7 +778,6 @@ namespace MarketConnectors.KuCoin
                     local_lob.LastUpdated = ts;
                     RaiseOnDataReceived(local_lob);
                 }
-
             }
             finally
             {

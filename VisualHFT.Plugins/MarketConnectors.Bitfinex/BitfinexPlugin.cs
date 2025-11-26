@@ -425,6 +425,8 @@ namespace MarketConnectors.Bitfinex
         }
         private void tradesBuffers_onReadAction(Tuple<string, BitfinexTradeSimple> item)
         {
+            if (!_localOrderBooks.ContainsKey(item.Item1))
+                return;
             var trade = tradePool.Get();
             trade.Price = item.Item2.Price;
             trade.Size = Math.Abs(item.Item2.Quantity);

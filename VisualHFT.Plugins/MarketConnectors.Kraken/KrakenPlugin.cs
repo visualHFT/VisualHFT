@@ -658,10 +658,11 @@ namespace MarketConnectors.Kraken
         }
         private void UpdateOrderBookSnapshot(KrakenBookUpdate data, string symbol)
         {
-            if (!_localOrderBooks.TryGetValue(symbol, out VisualHFT.Model.OrderBook? lob))
+            if (!_localOrderBooks.TryGetValue(symbol, out VisualHFT.Model.OrderBook? lob) || lob == null)
             {
                 return;
             }
+
             lob.Clear(); //reset order book
             foreach (var ask in data.Asks)
             {
