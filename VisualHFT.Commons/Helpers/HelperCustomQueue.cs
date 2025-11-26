@@ -197,7 +197,7 @@ public class HelperCustomQueue<T> : IDisposable
 
                 while (_queue.TryTake(out var item))
                 {
-                    if (_disposed)
+                    if (_disposed || _isPaused)
                         break;
 
                     try

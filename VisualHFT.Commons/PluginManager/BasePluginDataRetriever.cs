@@ -19,11 +19,13 @@ namespace VisualHFT.Commons.PluginManager
         private Dictionary<string, string> parsedNormalizedSymbols;
 
         private const int maxReconnectionAttempts = 5;
-        private const int MaxReconnectionPendingRequests = 1;
+        private const int MaxReconnectionPendingRequests = 3; // Increased from 1 to handle multi-symbol scenarios
         private int _reconnectionAttempt = 0;
         private int _pendingReconnectionRequests = 0;
         private SemaphoreSlim _reconnectionSemaphore = new SemaphoreSlim(1, 1);
-
+        
+        // Changed from bool to int for atomic operations (0=false, 1=true)
+        private int _isReconnectingFlag = 0;
 
         protected static bool _ARE_ALL_DATA_RETRIEVERS_ENABLE = true;
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
@@ -209,120 +211,158 @@ namespace VisualHFT.Commons.PluginManager
             _internalStartAsync = internalStartAsync;
         }
 
-        protected bool _isReconnecting = false;
+        /// <summary>
+        /// Handles connection loss with automatic reconnection logic.
+        /// Thread-safe: Can be called from multiple threads simultaneously.
+        /// Idempotent: Multiple calls are coalesced into a single reconnection attempt.
+        /// Uses retry loop instead of recursion for better reliability.
+        /// </summary>
         protected async Task HandleConnectionLost(string reason = null, Exception exception = null, bool forceStartRegardlessStatus = false)
         {
-            if (_isReconnecting)
-                return;
-            _isReconnecting = true;
-            if (!forceStartRegardlessStatus)
+            // ✅ ATOMIC CHECK-AND-SET: Prevents race conditions
+            if (Interlocked.CompareExchange(ref _isReconnectingFlag, 1, 0) == 1)
             {
-                if (Status == ePluginStatus
-                        .STOPPED_FAILED) //means that a fata error occurred, and user's attention is needed.
-                {
-                    log.Debug($"{this.Name} Skip reconnection because Status = STOPPED_FAILED");
-                    _isReconnecting = false;
-                    return;
-                }
-
-                if (Status == ePluginStatus.STOPPING)
-                {
-                    log.Debug($"{this.Name} Skip reconnection because Status = STOPPING");
-                    _isReconnecting = false;
-                    return;
-                }
-            }
-
-            // Log and notify the error or reason
-            var _msg = $"Trying to reconnect. Reason: {reason}";
-            LogAndNotify(_msg, exception);
-
-            if (Interlocked.Increment(ref _pendingReconnectionRequests) > MaxReconnectionPendingRequests)
-            {
-                Interlocked.Decrement(ref _pendingReconnectionRequests);
-                log.Warn($"{this.Name} Too many pending requests.");
-                _isReconnecting = false;
+                // Already reconnecting - this is expected when multiple threads detect the same failure
+                log.Debug($"{this.Name} Already reconnecting, ignoring duplicate request. Reason: {reason}");
                 return;
             }
-
-
 
             try
             {
-                await _reconnectionSemaphore.WaitAsync();
-
-                if (!forceStartRegardlessStatus && Status == ePluginStatus.STOPPED_FAILED) //means that a fata error occurred, and user's attention is needed.
+                // Early exit checks (after acquiring lock to avoid partial state)
+                if (!forceStartRegardlessStatus)
                 {
-                    log.Debug($"{this.Name} Skip reconnection because Status = STOPPED_FAILED");
-                    _isReconnecting = false;
+                    if (Status == ePluginStatus.STOPPED_FAILED)
+                    {
+                        log.Debug($"{this.Name} Skip reconnection because Status = STOPPED_FAILED");
+                        return;
+                    }
+
+                    if (Status == ePluginStatus.STOPPING)
+                    {
+                        log.Debug($"{this.Name} Skip reconnection because Status = STOPPING");
+                        return;
+                    }
+                }
+
+                // Log and notify the error or reason
+                var _msg = $"Trying to reconnect. Reason: {reason}";
+                LogAndNotify(_msg, exception);
+
+                // ✅ REQUEST THROTTLING: Prevents reconnection storms
+                if (Interlocked.Increment(ref _pendingReconnectionRequests) > MaxReconnectionPendingRequests)
+                {
+                    Interlocked.Decrement(ref _pendingReconnectionRequests);
+                    log.Warn($"{this.Name} Too many pending reconnection requests ({MaxReconnectionPendingRequests} max). Ignoring this request.");
                     return;
                 }
 
-                Random jitter = new Random();
-                _reconnectionAttempt++;
-                int backoffDelay = (int)Math.Pow(2, _reconnectionAttempt) * 1000 + jitter.Next(0, 1000);
-                await Task.Delay(backoffDelay);
-                log.Info($"{this.Name} Reconnection attempt {_reconnectionAttempt} of {maxReconnectionAttempts} after delay {backoffDelay} ms. Reason: {reason}");
-
-                if (!forceStartRegardlessStatus && Status == ePluginStatus.STOPPED_FAILED) //means that a fata error occurred, and user's attention is needed.
+                try
                 {
-                    log.Debug($"{this.Name} Skip reconnection because Status = STOPPED_FAILED");
-                    _isReconnecting = false;
-                    return;
+                    // ✅ SEMAPHORE: Ensures only one reconnection executes at a time
+                    await _reconnectionSemaphore.WaitAsync();
+
+                    try
+                    {
+                        Random jitter = new Random();
+                        
+                        // ✅ RETRY LOOP: Replaces recursion for better reliability
+                        while (_reconnectionAttempt < maxReconnectionAttempts)
+                        {
+                            if (!forceStartRegardlessStatus &&
+                                (Status == ePluginStatus.STOPPED_FAILED || Status == ePluginStatus.STOPPING))
+                            {
+                                log.Debug($"{this.Name} Skip reconnection because Status = {Status}");
+                                break;
+                            }
+                            try
+                            {
+                                // Re-check status before each attempt
+                                if (!forceStartRegardlessStatus && Status == ePluginStatus.STOPPED_FAILED)
+                                {
+                                    log.Debug($"{this.Name} Skip reconnection because Status = STOPPED_FAILED");
+                                    break;
+                                }
+
+                                // ✅ EXPONENTIAL BACKOFF WITH JITTER
+                                _reconnectionAttempt++;
+                                int backoffDelay = (int)Math.Pow(2, _reconnectionAttempt) * 1000 + jitter.Next(0, 1000);
+                                
+                                log.Info($"{this.Name} Reconnection attempt {_reconnectionAttempt} of {maxReconnectionAttempts} after delay {backoffDelay} ms. Reason: {reason}");
+                                await Task.Delay(backoffDelay);
+
+                                // Final status check before attempting reconnection
+                                if (!forceStartRegardlessStatus && Status == ePluginStatus.STOPPED_FAILED)
+                                {
+                                    log.Debug($"{this.Name} Skip reconnection because Status = STOPPED_FAILED");
+                                    break;
+                                }
+
+                                // Execute reconnection sequence
+                                await StopAsync();
+                                
+                                if (_internalStartAsync != null)
+                                {
+                                    await _internalStartAsync.Invoke();
+                                }
+
+                                // Preserve reconnection state across StartAsync
+                                var _reconnect = _reconnectionAttempt;
+                                var _pendingRec = _pendingReconnectionRequests;
+                                await StartAsync();
+                                _reconnectionAttempt = _reconnect;
+                                _pendingReconnectionRequests = _pendingRec;
+
+                                // Verify reconnection succeeded
+                                if (!forceStartRegardlessStatus && Status == ePluginStatus.STOPPED_FAILED)
+                                {
+                                    log.Debug($"{this.Name} Reconnection completed but Status = STOPPED_FAILED");
+                                    break;
+                                }
+
+                                // ✅ SUCCESS: Reset counters and exit loop
+                                log.Info($"{this.Name} Reconnection successful.");
+                                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
+                                Status = ePluginStatus.STARTED;
+                                _pendingReconnectionRequests = 0;
+                                _reconnectionAttempt = 0;
+                                break; // Exit retry loop on success
+                            }
+                            catch (Exception ex)
+                            {
+                                // Log the failure and continue to next iteration
+                                var msgErr = $"Reconnection failed. Attempt {_reconnectionAttempt} of {maxReconnectionAttempts}";
+                                LogException(ex, msgErr, true);
+                                
+                                // Check if we've exhausted all attempts
+                                if (_reconnectionAttempt >= maxReconnectionAttempts)
+                                {
+                                    HandleMaxReconnectionAttempts();
+                                    _pendingReconnectionRequests = 0;
+                                    _reconnectionAttempt = 0;
+                                    break; // Exit retry loop on max attempts
+                                }
+                                
+                                // Loop continues to next attempt
+                                log.Debug($"{this.Name} Will retry reconnection (attempt {_reconnectionAttempt + 1} of {maxReconnectionAttempts})");
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        _reconnectionSemaphore.Release();
+                    }
                 }
-
-
-                await StopAsync();
-                if (_internalStartAsync != null)
-                    await _internalStartAsync.Invoke();
+                finally
                 {
-                    //avoid resetting these values
-                    var _reconnect = _reconnectionAttempt;
-                    var _pendingRec = _pendingReconnectionRequests;
-                    await StartAsync();
-                    _reconnectionAttempt = _reconnect;
-                    _pendingReconnectionRequests = _pendingRec;
-                }
-
-
-                if (!forceStartRegardlessStatus && Status == ePluginStatus.STOPPED_FAILED) //means that a fata error occurred, and user's attention is needed.
-                {
-                    log.Debug($"{this.Name} Skip reconnection because Status = STOPPED_FAILED");
-                    _isReconnecting = false;
-                    return;
-                }
-                log.Info($"{this.Name} Reconnection successful.");
-                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
-                Status = ePluginStatus.STARTED;
-                //reset
-                _pendingReconnectionRequests = 0;
-                _reconnectionAttempt = 0;
-            }
-            catch (Exception ex)
-            {
-                _reconnectionAttempt++;
-                if (_reconnectionAttempt >= maxReconnectionAttempts)
-                {
-                    HandleMaxReconnectionAttempts();
-                    //reset
-                    _pendingReconnectionRequests = 0;
-                    _reconnectionAttempt = 0;
-                }
-                else
-                {
-                    var msgErr = $"Reconnection failed. Attempt {_reconnectionAttempt} of {maxReconnectionAttempts}";
-                    LogException(ex, msgErr, true);
-                    _reconnectionSemaphore.Release();
-                    await HandleConnectionLost(ex.Message, ex);
+                    Interlocked.Decrement(ref _pendingReconnectionRequests);
                 }
             }
             finally
             {
-                Interlocked.Decrement(ref _pendingReconnectionRequests);
-                _reconnectionSemaphore.Release();
-                _isReconnecting = false;
+                // ✅ ATOMIC RESET: Always release the reconnection lock
+                Interlocked.Exchange(ref _isReconnectingFlag, 0);
             }
-
         }
 
         public void LogException(Exception? ex, string? context = null, bool NotifyToUI = false)

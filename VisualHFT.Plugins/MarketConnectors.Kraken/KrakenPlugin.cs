@@ -38,11 +38,12 @@ namespace MarketConnectors.Kraken
         private Dictionary<string, VisualHFT.Model.OrderBook> _localOrderBooks = new Dictionary<string, VisualHFT.Model.OrderBook>();
         private Dictionary<string, HelperCustomQueue<Tuple<DateTime, string, KrakenBookUpdate>>> _eventBuffers = new();
         private Dictionary<string, HelperCustomQueue<Tuple<string, KrakenTradeUpdate>>> _tradesBuffers = new();
+        private readonly object _buffersLock = new object(); // ✅ ADD: Thread-safe buffer access
 
         private int pingFailedAttempts = 0;
         private System.Timers.Timer _timerPing;
-        private CallResult<UpdateSubscription> deltaSubscription;
-        private CallResult<UpdateSubscription> tradesSubscription;
+        private Dictionary<string, CallResult<UpdateSubscription>> deltaSubscriptions = new(); // ✅ FIX: Store per-symbol
+        private Dictionary<string, CallResult<UpdateSubscription>> tradesSubscriptions = new(); // ✅ FIX: Store per-symbol
 
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
@@ -93,11 +94,7 @@ namespace MarketConnectors.Kraken
                 await InternalStartAsync();
                 if (Status == ePluginStatus.STOPPED_FAILED) //check again here for failure
                     return;
-                log.Info($"Plugin has successfully started.");
-                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
-                Status = ePluginStatus.STARTED;
-
-
+                // ✅ Status is now set in InternalStartAsync - no need to duplicate here
             }
             catch (Exception ex)
             {
@@ -122,11 +119,31 @@ namespace MarketConnectors.Kraken
             await InitializeDeltasAsync();
             await InitializePingTimerAsync();
             await InitializeUserPrivateOrders();
+
+            // ✅ FIX: Set status to STARTED so tests can detect status transitions
+            log.Info($"Plugin has successfully started.");
+            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
+            Status = ePluginStatus.STARTED;
         }
         public override async Task StopAsync()
         {
+            // ✅ FIX: Set status FIRST to prevent reconnection race condition
             Status = ePluginStatus.STOPPING;
             log.Info($"{this.Name} is stopping.");
+
+            // ✅ FIX: Force cancel any pending reconnections by closing subscriptions first
+            foreach (var sub in deltaSubscriptions.Values)
+            {
+                UnattachEventHandlers(sub?.Data);
+                if (sub != null && sub.Data != null)
+                    await sub.Data.CloseAsync();
+            }
+            foreach (var sub in tradesSubscriptions.Values)
+            {
+                UnattachEventHandlers(sub?.Data);
+                if (sub != null && sub.Data != null)
+                    await sub.Data.CloseAsync();
+            }
 
             await ClearAsync();
             RaiseOnDataReceived(new List<VisualHFT.Model.OrderBook>());
@@ -137,25 +154,34 @@ namespace MarketConnectors.Kraken
 
         private async Task ClearAsync()
         {
-
-            UnattachEventHandlers(deltaSubscription?.Data);
-            UnattachEventHandlers(tradesSubscription?.Data);
+            // ✅ Subscription cleanup is done in StopAsync to prevent reconnection races
+            // Only unsubscribe here if not already done
             if (_socketClient != null)
                 await _socketClient.UnsubscribeAllAsync();
-            if (deltaSubscription != null && deltaSubscription.Data != null)
-                await deltaSubscription.Data.CloseAsync();
-            if (tradesSubscription != null && tradesSubscription.Data != null)
-                await tradesSubscription.Data.CloseAsync();
+                
             _timerPing?.Stop();
             _timerPing?.Dispose();
 
-            foreach (var q in _eventBuffers)
-                q.Value.Stop();
-            _eventBuffers.Clear();
+            // ✅ FIX: Pause queues before stopping with thread-safe lock
+            lock (_buffersLock)
+            {
+                foreach (var q in _eventBuffers.Values)
+                {
+                    q?.PauseConsumer();
+                    q?.Stop();
+                }
+                _eventBuffers.Clear();
 
-            foreach (var q in _tradesBuffers)
-                q.Value.Stop();
-            _tradesBuffers.Clear();
+                foreach (var q in _tradesBuffers.Values)
+                {
+                    q?.PauseConsumer();
+                    q?.Stop();
+                }
+                _tradesBuffers.Clear();
+            }
+
+            deltaSubscriptions.Clear();
+            tradesSubscriptions.Clear();
 
             tradePool.Dispose();
             tradePool = new CustomObjectPool<Trade>();
@@ -176,10 +202,9 @@ namespace MarketConnectors.Kraken
             foreach (var symbol in GetAllNonNormalizedSymbols())
             {
                 var _normalizedSymbol = GetNormalizedSymbol(symbol);
-                var _traderQueueRef = _tradesBuffers[_normalizedSymbol];
 
                 log.Info($"{this.Name}: sending WS Trades Subscription {_normalizedSymbol} ");
-                tradesSubscription = await _socketClient.SpotApi.SubscribeToTradeUpdatesAsync(
+                var tradesSubscription = await _socketClient.SpotApi.SubscribeToTradeUpdatesAsync(
                     symbol,
                     trade =>
                     {
@@ -188,17 +213,34 @@ namespace MarketConnectors.Kraken
                         {
                             try
                             {
+                                // ✅ FIX: Thread-safe buffer access (don't capture reference)
+                                HelperCustomQueue<Tuple<string, KrakenTradeUpdate>> buffer;
+                                lock (_buffersLock)
+                                {
+                                    if (!_tradesBuffers.TryGetValue(_normalizedSymbol, out buffer))
+                                        return; // Buffer was cleared during reconnection
+                                }
+                                
                                 foreach (var item in trade.Data)
                                 {
                                     item.Timestamp = trade.ReceiveTime; 
-                                    _traderQueueRef.Add(
-                                        new Tuple<string, KrakenTradeUpdate>(_normalizedSymbol, item));
+                                    buffer.Add(new Tuple<string, KrakenTradeUpdate>(_normalizedSymbol, item));
                                 }
                             }
                             catch (Exception ex)
                             {
                                 var _error = $"Will reconnect. Unhandled error while receiving trading data for {_normalizedSymbol}.";
                                 LogException(ex, _error);
+                                
+                                // ✅ FIX: Pause queue before reconnecting
+                                lock (_buffersLock)
+                                {
+                                    if (_tradesBuffers.TryGetValue(_normalizedSymbol, out var buffer))
+                                    {
+                                        buffer?.PauseConsumer();
+                                    }
+                                }
+                                
                                 Task.Run(async () => await HandleConnectionLost(_error, ex));
                             }
                         }
@@ -206,6 +248,7 @@ namespace MarketConnectors.Kraken
                 if (tradesSubscription.Success)
                 {
                     AttachEventHandlers(tradesSubscription.Data);
+                    tradesSubscriptions[_normalizedSymbol] = tradesSubscription; // ✅ FIX: Store by symbol
                 }
                 else
                 {
@@ -320,7 +363,7 @@ namespace MarketConnectors.Kraken
                 var normalizedSymbol = GetNormalizedSymbol(symbol);
                 log.Info($"{this.Name}: sending WS Delta Subscription {normalizedSymbol} ");
 
-                deltaSubscription = await _socketClient.SpotApi.SubscribeToAggregatedOrderBookUpdatesAsync(
+                var deltaSubscription = await _socketClient.SpotApi.SubscribeToAggregatedOrderBookUpdatesAsync(
                     symbol,
                     _settings.DepthLevels,
                     data =>
@@ -339,9 +382,16 @@ namespace MarketConnectors.Kraken
                                         HelperNotificationManager.Instance.AddNotification(this.Name, _msg, HelprNorificationManagerTypes.WARNING, HelprNorificationManagerCategories.PLUGINS);
                                     }
 
-                                    _eventBuffers[normalizedSymbol].Add(
-                                        new Tuple<DateTime, string, KrakenBookUpdate>(
-                                            data.ReceiveTime.ToLocalTime(), normalizedSymbol, data.Data));
+                                    // ✅ FIX: Thread-safe buffer access
+                                    HelperCustomQueue<Tuple<DateTime, string, KrakenBookUpdate>> buffer;
+                                    lock (_buffersLock)
+                                    {
+                                        if (!_eventBuffers.TryGetValue(normalizedSymbol, out buffer))
+                                            return; // Buffer was cleared during reconnection
+                                    }
+                                    
+                                    buffer.Add(new Tuple<DateTime, string, KrakenBookUpdate>(
+                                        data.ReceiveTime.ToLocalTime(), normalizedSymbol, data.Data));
                                 }
                                 else
                                 {
@@ -354,9 +404,18 @@ namespace MarketConnectors.Kraken
                                 if (data != null && data.Data != null)
                                     _normalizedSymbol = GetNormalizedSymbol(data.Data.Symbol);
 
-
                                 var _error = $"Will reconnect. Unhandled error while receiving delta market data for {_normalizedSymbol}.";
                                 LogException(ex, _error);
+                                
+                                // ✅ FIX: Pause queue before reconnecting
+                                lock (_buffersLock)
+                                {
+                                    if (_eventBuffers.TryGetValue(normalizedSymbol, out var buffer))
+                                    {
+                                        buffer?.PauseConsumer();
+                                    }
+                                }
+                                
                                 Task.Run(async () => await HandleConnectionLost(_error, ex));
                             }
                         }
@@ -364,6 +423,7 @@ namespace MarketConnectors.Kraken
                 if (deltaSubscription.Success)
                 {
                     AttachEventHandlers(deltaSubscription.Data);
+                    deltaSubscriptions[normalizedSymbol] = deltaSubscription; // ✅ FIX: Store by symbol
                 }
                 else
                 {
@@ -754,8 +814,11 @@ namespace MarketConnectors.Kraken
                 _disposed = true;
                 if (disposing)
                 {
-                    UnattachEventHandlers(deltaSubscription?.Data);
-                    UnattachEventHandlers(tradesSubscription?.Data);
+                    foreach (var sub in deltaSubscriptions.Values)
+                        UnattachEventHandlers(sub?.Data);
+                    foreach (var sub in tradesSubscriptions.Values)
+                        UnattachEventHandlers(sub?.Data);
+                    
                     _socketClient?.UnsubscribeAllAsync();
                     _socketClient?.Dispose();
                     _restClient?.Dispose();
@@ -768,7 +831,6 @@ namespace MarketConnectors.Kraken
                     foreach (var q in _tradesBuffers)
                         q.Value?.Dispose();
                     _tradesBuffers.Clear();
-
 
                     if (_localOrderBooks != null)
                     {

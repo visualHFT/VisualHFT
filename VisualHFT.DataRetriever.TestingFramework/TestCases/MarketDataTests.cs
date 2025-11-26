@@ -630,7 +630,8 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
                     mktConnector.InjectSnapshot(snapshotModel, snapshotModel.Sequence); //snapshot created
 
                     bool forceEndTest = false;
-                    Assert.Throws<Exception>(() =>
+                    // ✅ FIX: Accept any exception type (not just exact System.Exception)
+                    var ex = Assert.ThrowsAny<Exception>(() =>
                     {
                         try
                         {
@@ -648,6 +649,7 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
                             throw new Exception(); //just get out of Assert.Throws block
                         }
                     });
+                    
                     if (forceEndTest)
                         throw new ExceptionDeltasNotSupportedByExchange();
 

@@ -96,14 +96,24 @@ namespace MarketConnectors.Gemini
 
                 }
             }
-            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
-            Status = ePluginStatus.STARTED;
-
         }
 
         public async Task ClearAsync()
         {
             _heartbeatTimer?.Dispose();
+            
+            // ✅ FIX: Pause and stop queue before clearing
+            try
+            {
+                _eventBuffers?.PauseConsumer();
+                _eventBuffers?.Stop();
+                _eventBuffers?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                log.Debug($"Error disposing event buffers: {ex.Message}");
+            }
+            
             //CLEAR LOB
             if (_localOrderBooks != null)
             {
@@ -127,6 +137,11 @@ namespace MarketConnectors.Gemini
             _heartbeatTimer = new Timer(CheckConnectionStatus, null, TimeSpan.Zero, TimeSpan.FromSeconds(5)); // Check every 5 seconds
 
             await InitializeUserPrivateOrders();
+            
+            // ✅ FIX: Set status here for consistency (status was previously set in InitializeDeltasAsync)
+            log.Info($"Plugin has successfully started.");
+            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
+            Status = ePluginStatus.STARTED;
         }
 
         private void eventBuffers_onReadAction(MarketUpdate eventData)
@@ -225,11 +240,11 @@ namespace MarketConnectors.Gemini
                 try
                 {
                     await _socketClient.Start();
-                    log.Info($"Plugin has successfully started.");
+                    // ✅ Status is now set in InternalStartAsync - removed duplicate here
+                    log.Info($"WebSocket connection established.");
                     RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
                     string jsonToSubscribe = JsonConvert.SerializeObject(geminiSubscription);
                     _socketClient.Send(jsonToSubscribe);
-                    Status = ePluginStatus.STARTED;
                 }
                 catch (Exception ex)
                 {
@@ -385,11 +400,32 @@ namespace MarketConnectors.Gemini
             log.Info($"{this.Name} is stopping.");
 
             await ClearAsync();
-            if (_socketClient != null)
+            
+            // ✅ FIX: Add try-catch and check if client is running before stopping
+            if (_socketClient != null && _socketClient.IsRunning)
             {
-                await _socketClient.Stop(WebSocketCloseStatus.NormalClosure, "Manual CLosing");
-                _socketClient.Dispose();
+                try
+                {
+                    await _socketClient.Stop(WebSocketCloseStatus.NormalClosure, "Manual Closing");
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Client already disposed during reconnection, safe to ignore
+                    log.Debug("Socket client already disposed, ignoring stop request");
+                }
             }
+            
+            // ✅ FIX: Safe disposal with try-catch
+            try
+            {
+                _socketClient?.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Already disposed, safe to ignore
+                log.Debug("Socket client already disposed, ignoring disposal");
+            }
+            
             RaiseOnDataReceived(new List<VisualHFT.Model.OrderBook>());
             RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED));
             await base.StopAsync();

@@ -79,6 +79,24 @@ namespace VisualHFT.DataRetriever.TestingFramework.Core
         }
 
         /// <summary>
+        /// Creates a configuration optimized for ultra-fast testing (minimal timeouts for reconnection tests)
+        /// /// Use this for tests that don't require real network data (e.g., reconnection logic)
+        /// </summary>
+        public static TestConfiguration UltraFast()
+        {
+            return new TestConfiguration
+            {
+                StatusChangeTimeout = TimeSpan.FromSeconds(15),      // ? Reduced from 60s
+                DataReceptionTimeout = TimeSpan.FromSeconds(10),     // ? Reduced from 30s
+                IntegrityTestDuration = TimeSpan.FromSeconds(5),     // ? Reduced from 20s
+                InitialDataDelay = TimeSpan.FromSeconds(2),          // ? Reduced from 5s
+                CrossedSpreadTolerance = TimeSpan.FromMilliseconds(500),
+                TestExecutionDelay = TimeSpan.FromMilliseconds(100), // ? Minimal delay
+                CleanupTimeout = TimeSpan.FromSeconds(5)             // ? Reduced from 10s
+            };
+        }
+
+        /// <summary>
         /// Creates a configuration for thorough testing (longer timeouts)
         /// </summary>
         public static TestConfiguration Thorough()

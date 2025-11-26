@@ -13,12 +13,10 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Bitfinex.Net.Enums;
-using CryptoExchange.Net.Converters.SystemTextJson;
 using VisualHFT.Commons.PluginManager;
 using VisualHFT.UserSettings;
 using VisualHFT.Commons.Pools;
 using VisualHFT.Commons.Model;
-using VisualHFT.Commons.Helpers;
 using CryptoExchange.Net.Objects.Sockets;
 using VisualHFT.Enums;
 using VisualHFT.PluginManager;
@@ -39,11 +37,12 @@ namespace MarketConnectors.Bitfinex
         private Dictionary<string, VisualHFT.Model.OrderBook> _localOrderBooks = new Dictionary<string, VisualHFT.Model.OrderBook>();
         private Dictionary<string, HelperCustomQueue<Tuple<DateTime, string, BitfinexOrderBookEntry>>> _eventBuffers = new();
         private Dictionary<string, HelperCustomQueue<Tuple<string, BitfinexTradeSimple>>> _tradesBuffers = new();
+        private readonly object _buffersLock = new object(); // ✅ ADD: Thread-safe buffer access
 
         private int pingFailedAttempts = 0;
         private System.Timers.Timer _timerPing;
-        private CallResult<UpdateSubscription> deltaSubscription;
-        private CallResult<UpdateSubscription> tradesSubscription;
+        private CallResult<UpdateSubscription> deltaSubscription;  // Revert to single variable
+        private CallResult<UpdateSubscription> tradesSubscription; // Revert to single variable
 
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
         private readonly CustomObjectPool<VisualHFT.Model.Trade> tradePool = new CustomObjectPool<VisualHFT.Model.Trade>();//pool of Trade objects
@@ -68,8 +67,7 @@ namespace MarketConnectors.Bitfinex
 
         public override async Task StartAsync()
         {
-
-            await base.StartAsync();//call the base first
+            await base.StartAsync(); // ✅ This sets Status = STARTING
 
             _socketClient = new BitfinexSocketClient(options =>
             {
@@ -85,14 +83,14 @@ namespace MarketConnectors.Bitfinex
                 options.Environment = BitfinexEnvironment.Live;
             });
 
+            // ✅ FIX: Explicitly report STARTING status so transition history captures it
+            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTING));
+
             try
             {
                 await InternalStartAsync();
-                if (Status == ePluginStatus.STOPPED_FAILED) //check again here for failure
+                if (Status == ePluginStatus.STOPPED_FAILED)
                     return;
-                log.Info($"Plugin has successfully started.");
-                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
-                Status = ePluginStatus.STARTED;
             }
             catch (Exception ex)
             {
@@ -117,11 +115,26 @@ namespace MarketConnectors.Bitfinex
             await InitializeTradesAsync();
             await InitializeUserPrivateOrders();
             await InitializePingTimerAsync();
+            
+            // ✅ FIX: Set status to STARTED so tests can detect status transitions
+            log.Info($"Plugin has successfully started.");
+            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
+            Status = ePluginStatus.STARTED;
         }
         public override async Task StopAsync()
         {
+            // ✅ FIX: Set status FIRST to prevent reconnection race condition
             Status = ePluginStatus.STOPPING;
             log.Info($"{this.Name} is stopping.");
+
+            // ✅ FIX: Force cancel any pending reconnections by closing subscriptions first
+            UnattachEventHandlers(deltaSubscription?.Data);
+            UnattachEventHandlers(tradesSubscription?.Data);
+            
+            if (deltaSubscription != null && deltaSubscription.Data != null)
+                await deltaSubscription.Data.CloseAsync();
+            if (tradesSubscription != null && tradesSubscription.Data != null)
+                await tradesSubscription.Data.CloseAsync();
 
             await ClearAsync();
             RaiseOnDataReceived(new List<VisualHFT.Model.OrderBook>());
@@ -131,27 +144,31 @@ namespace MarketConnectors.Bitfinex
         }
         public async Task ClearAsync()
         {
-            UnattachEventHandlers(deltaSubscription?.Data);
-            UnattachEventHandlers(tradesSubscription?.Data);
+            // ✅ Subscription cleanup is done in StopAsync to prevent reconnection races
+            // Only unsubscribe here if not already done
             if (_socketClient != null)
                 await _socketClient.UnsubscribeAllAsync();
-            if (deltaSubscription != null && deltaSubscription.Data != null)
-                await deltaSubscription.Data.CloseAsync();
-            if (tradesSubscription != null && tradesSubscription.Data != null)
-                await tradesSubscription.Data.CloseAsync();
-            await _socketClient.UnsubscribeAllAsync();
 
             _timerPing?.Stop();
             _timerPing?.Dispose();
 
-            foreach (var q in _eventBuffers)
-                q.Value.Stop();
-            _eventBuffers.Clear();
+            // ✅ FIX: Pause queues before stopping to prevent processing during shutdown
+            lock (_buffersLock)
+            {
+                foreach (var q in _eventBuffers.Values)
+                {
+                    q?.PauseConsumer();
+                    q?.Stop();
+                }
+                _eventBuffers.Clear();
 
-            foreach (var q in _tradesBuffers)
-                q.Value.Stop();
-            _tradesBuffers.Clear();
-
+                foreach (var q in _tradesBuffers.Values)
+                {
+                    q?.PauseConsumer();
+                    q?.Stop();
+                }
+                _tradesBuffers.Clear();
+            }
 
             //CLEAR LOB
             if (_localOrderBooks != null)
@@ -169,7 +186,6 @@ namespace MarketConnectors.Bitfinex
             foreach (var symbol in GetAllNonNormalizedSymbols())
             {
                 var _normalizedSymbol = GetNormalizedSymbol(symbol);
-                var _traderQueueRef = _tradesBuffers[_normalizedSymbol];
 
                 log.Info($"{this.Name}: sending WS Trades Subscription {_normalizedSymbol} ");
                 tradesSubscription = await _socketClient.SpotApi.SubscribeToTradeUpdatesAsync(
@@ -181,18 +197,35 @@ namespace MarketConnectors.Bitfinex
                         {
                             try
                             {
+                                // ✅ FIX: Thread-safe buffer access
+                                HelperCustomQueue<Tuple<string, BitfinexTradeSimple>> buffer;
+                                lock (_buffersLock)
+                                {
+                                    if (!_tradesBuffers.TryGetValue(_normalizedSymbol, out buffer))
+                                        return; // Buffer was cleared during reconnection
+                                }
+                                
                                 foreach (var item in trade.Data)
                                 {
                                     item.Timestamp = trade.ReceiveTime; //not sure why these are different
-                                    _traderQueueRef.Add(
+                                    buffer.Add(
                                         new Tuple<string, BitfinexTradeSimple>(_normalizedSymbol, item));
                                 }
                             }
                             catch (Exception ex)
                             {
-
                                 var _error = $"Will reconnect. Unhandled error while receiving trading data for {_normalizedSymbol}.";
                                 LogException(ex, _error);
+                                
+                                // ✅ FIX: Pause queue before reconnecting
+                                lock (_buffersLock)
+                                {
+                                    if (_tradesBuffers.TryGetValue(_normalizedSymbol, out var buffer))
+                                    {
+                                        buffer?.PauseConsumer();
+                                    }
+                                }
+                                
                                 Task.Run(async () => await HandleConnectionLost(_error, ex));
                             }
                         }
@@ -298,9 +331,17 @@ namespace MarketConnectors.Bitfinex
                                 }
                                 else
                                 {
+                                    // ✅ FIX: Thread-safe buffer access
+                                    HelperCustomQueue<Tuple<DateTime, string, BitfinexOrderBookEntry>> buffer;
+                                    lock (_buffersLock)
+                                    {
+                                        if (!_eventBuffers.TryGetValue(normalizedSymbol, out buffer))
+                                            return; // Buffer was cleared during reconnection
+                                    }
+                                    
                                     foreach (var item in data.Data)
                                     {
-                                        _eventBuffers[normalizedSymbol].Add(
+                                        buffer.Add(
                                             new Tuple<DateTime, string, BitfinexOrderBookEntry>(
                                                 data.ReceiveTime.ToLocalTime(), normalizedSymbol, item));
                                     }
@@ -308,9 +349,18 @@ namespace MarketConnectors.Bitfinex
                             }
                             catch (Exception ex)
                             {
-
                                 var _error = $"Will reconnect. Unhandled error while receiving delta market data for {normalizedSymbol}.";
                                 LogException(ex, _error);
+                                
+                                // ✅ FIX: Pause queue before reconnecting
+                                lock (_buffersLock)
+                                {
+                                    if (_eventBuffers.TryGetValue(normalizedSymbol, out var buffer))
+                                    {
+                                        buffer?.PauseConsumer();
+                                    }
+                                }
+                                
                                 Task.Run(async () => await HandleConnectionLost(_error, ex));
                             }
                         }
@@ -420,6 +470,22 @@ namespace MarketConnectors.Bitfinex
             data.ConnectionRestored -= deltaSubscription_ConnectionRestored;
             data.ActivityPaused -= deltaSubscription_ActivityPaused;
             data.ActivityUnpaused -= deltaSubscription_ActivityUnpaused;
+        }
+        private void UnattachEventHandlers(IEnumerable<UpdateSubscription> data)
+        {
+            if (data == null)
+                return;
+
+            foreach (var d in data)
+            {
+                if (d == null) continue;
+                d.Exception -= deltaSubscription_Exception;
+                d.ConnectionLost -= deltaSubscription_ConnectionLost;
+                d.ConnectionClosed -= deltaSubscription_ConnectionClosed;
+                d.ConnectionRestored -= deltaSubscription_ConnectionRestored;
+                d.ActivityPaused -= deltaSubscription_ActivityPaused;
+                d.ActivityUnpaused -= deltaSubscription_ActivityUnpaused;
+            }
         }
         private void deltaSubscription_ActivityUnpaused()
         {
@@ -617,6 +683,7 @@ namespace MarketConnectors.Bitfinex
                 {
                     UnattachEventHandlers(deltaSubscription?.Data);
                     UnattachEventHandlers(tradesSubscription?.Data);
+                    
                     _socketClient?.UnsubscribeAllAsync();
                     _socketClient?.Dispose();
                     _restClient?.Dispose();
@@ -629,7 +696,6 @@ namespace MarketConnectors.Bitfinex
                     foreach (var q in _tradesBuffers)
                         q.Value?.Dispose();
                     _tradesBuffers.Clear();
-
 
                     if (_localOrderBooks != null)
                     {

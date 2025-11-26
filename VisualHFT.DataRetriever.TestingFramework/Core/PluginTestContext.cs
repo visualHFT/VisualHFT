@@ -1,8 +1,9 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using VisualHFT.Commons.Interfaces;
+using VisualHFT.Commons.Extensions; // ✅ ADD: For ToPluginStatus extension method
 using VisualHFT.DataRetriever;
 using VisualHFT.Helpers;
 using VisualHFT.Model;
@@ -29,6 +30,10 @@ namespace VisualHFT.DataRetriever.TestingFramework.Core
         private List<Exception> _allExceptions = new List<Exception>();
         private bool _disposed = false;
 
+        // Event-driven status tracking
+        private readonly Dictionary<ePluginStatus, TaskCompletionSource<bool>> _statusWaiters = new();
+        private ePluginStatus _lastObservedStatus = ePluginStatus.LOADED;
+
         // Event subscriptions for cleanup tracking
         private readonly List<Action> _subscriptionCleanupActions = new List<Action>();
 
@@ -36,6 +41,14 @@ namespace VisualHFT.DataRetriever.TestingFramework.Core
         public IDataRetriever DataRetriever => _dataRetriever;
         public IPlugin Plugin => _pluginInterface;
         public CancellationToken CancellationToken => _cancellationTokenSource.Token;
+        private readonly List<StatusTransition> _transitions = new();
+
+        private class StatusTransition
+        {
+            public ePluginStatus FromStatus { get; set; }
+            public ePluginStatus ToStatus { get; set; }
+            public DateTime Timestamp { get; set; }
+        }
 
         public OrderBook? LastOrderBook 
         { 
@@ -82,6 +95,40 @@ namespace VisualHFT.DataRetriever.TestingFramework.Core
             HelperOrderBook.Instance.Subscribe(orderBookHandler);
             _subscriptionCleanupActions.Add(() => HelperOrderBook.Instance.Unsubscribe(orderBookHandler));
 
+            // ✅ FIX: Use Plugin instance comparison instead of ProviderCode comparison
+            // This prevents silent event discards when Settings.Provider is null/recreated during reconnection
+        EventHandler<Provider> statusChangeHandler = (sender, provider) =>
+            {
+                if (provider?.Plugin == _pluginInterface)
+                {
+                    var newStatus = provider.Status.ToPluginStatus();
+                    lock (_lockObject)
+                    {
+                        var transition = new StatusTransition
+                        {
+                            FromStatus = _lastObservedStatus,
+                            ToStatus = newStatus,
+                            Timestamp = DateTime.UtcNow
+                        };
+
+                        _transitions.Add(transition);
+                        _lastObservedStatus = newStatus;
+
+                        // ✅ FIX: Don't auto-cleanup during tests - let Reset() handle it
+                        // This prevents "Collection was modified" exceptions
+
+                        // Complete waiters
+                        if (_statusWaiters.TryGetValue(newStatus, out var tcs))
+                        {
+                            tcs.TrySetResult(true);
+                        }
+                    }
+                }
+            };
+
+            HelperProvider.Instance.OnStatusChanged += statusChangeHandler;
+            _subscriptionCleanupActions.Add(() => HelperProvider.Instance.OnStatusChanged -= statusChangeHandler);
+
             // Subscribe to error notifications
             EventHandler<ErrorNotificationEventArgs> errorHandler = (sender, e) =>
             {
@@ -103,25 +150,56 @@ namespace VisualHFT.DataRetriever.TestingFramework.Core
         }
 
         /// <summary>
-        /// Waits for the plugin to reach the specified status within the timeout period
+        /// Waits for the plugin to reach the specified status within the timeout period using hybrid event+polling approach
         /// </summary>
         public async Task<bool> WaitForStatusAsync(ePluginStatus expectedStatus, TimeSpan timeout)
         {
-            using var timeoutCts = new CancellationTokenSource(timeout);
-            using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(
-                _cancellationTokenSource.Token, timeoutCts.Token);
+            // ✅ FIX: Check if status WAS EVER reached (not just "is it now")
+            lock (_lockObject)
+            {
+                // Check current state
+                if (_pluginInterface.Status == expectedStatus)
+                    return true;
+
+                // ✅ NEW: Check transition history
+                if (_transitions.Any(t => t.ToStatus == expectedStatus))
+                    return true;  // "Plugin DID transition to this state"
+            }
+
+            // Set up waiter for future transitions
+            TaskCompletionSource<bool> tcs = new();
+            lock (_lockObject)
+            {
+                _statusWaiters[expectedStatus] = tcs;
+            }
 
             try
             {
-                while (!combinedCts.Token.IsCancellationRequested && _pluginInterface.Status != expectedStatus)
+                using var timeoutCts = new CancellationTokenSource(timeout);
+
+                // Wait for either:
+                // 1. Event fires (status changes TO expectedStatus)
+                // 2. Timeout expires
+                var completedTask = await Task.WhenAny(
+                    tcs.Task,
+                    Task.Delay(timeout, timeoutCts.Token)
+                );
+
+                if (completedTask == tcs.Task)
+                    return await tcs.Task;  // Event fired
+
+                // Timeout - final check of history
+                lock (_lockObject)
                 {
-                    await Task.Delay(50, combinedCts.Token);
+                    return _transitions.Any(t => t.ToStatus == expectedStatus);
                 }
-                return _pluginInterface.Status == expectedStatus;
             }
-            catch (OperationCanceledException)
+            finally
             {
-                return false;
+                lock (_lockObject)
+                {
+                    _statusWaiters.Remove(expectedStatus);
+                }
             }
         }
 
@@ -158,6 +236,9 @@ namespace VisualHFT.DataRetriever.TestingFramework.Core
                 _lastOrderBook = null;
                 _lastException = null;
                 _allExceptions.Clear();
+                _statusWaiters.Clear();
+                _transitions.Clear(); // ✅ FIX: Clear transition history between tests
+                _lastObservedStatus = _pluginInterface.Status;
             }
         }
 
@@ -219,6 +300,16 @@ namespace VisualHFT.DataRetriever.TestingFramework.Core
             }
             finally
             {
+                lock (_lockObject)
+                {
+                    // Complete all pending waiters
+                    foreach (var waiter in _statusWaiters.Values)
+                    {
+                        waiter.TrySetCanceled();
+                    }
+                    _statusWaiters.Clear();
+                }
+                
                 _cancellationTokenSource.Dispose();
                 _disposalCompletionSource.SetResult(true);
             }

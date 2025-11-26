@@ -154,7 +154,13 @@ namespace VisualHFT.Helpers
                 if (!this.ContainsKey(provider.ProviderCode))
                 {
                     provider.LastUpdated = HelperTimeProvider.Now;
-                    return this.TryAdd(provider.ProviderCode, provider);
+                    bool added = this.TryAdd(provider.ProviderCode, provider);
+                    if (added)
+                    {
+                        // ✅ FIX: Fire OnStatusChanged on first registration too!
+                        OnStatusChanged?.Invoke(this, provider);
+                    }
+                    return added;
                 }
                 else
                 {

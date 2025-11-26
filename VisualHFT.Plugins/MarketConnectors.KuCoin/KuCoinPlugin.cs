@@ -14,7 +14,6 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -68,7 +67,6 @@ namespace MarketConnectors.KuCoin
         private readonly CustomObjectPool<VisualHFT.Model.Trade> tradePool =
             new CustomObjectPool<VisualHFT.Model.Trade>(); //pool of Trade objects
 
-
         public override string Name { get; set; } = "KuCoin Plugin";
         public override string Version { get; set; } = "1.0.0";
         public override string Description { get; set; } = "Connects to KuCoin websockets.";
@@ -98,8 +96,7 @@ namespace MarketConnectors.KuCoin
         public override async Task StartAsync()
         {
             if (Status == ePluginStatus.STARTED ||
-                    Status == ePluginStatus.STARTING ||
-                    _isReconnecting) // ⚠️ Need access to base class field
+                    Status == ePluginStatus.STARTING)
             {
                 log.Warn("Already started or starting, ignoring duplicate Start request");
                 return;
@@ -226,6 +223,7 @@ namespace MarketConnectors.KuCoin
             {
                 foreach (var q in _eventBuffers.Values)
                 {
+                    q?.PauseConsumer(); // ⬅️ ADD THIS: Ensure paused before stopping
                     q?.Stop();
                     q?.Dispose();
                 }
@@ -233,6 +231,7 @@ namespace MarketConnectors.KuCoin
 
                 foreach (var q in _tradesBuffers.Values)
                 {
+                    q?.PauseConsumer(); // ⬅️ ADD THIS: Ensure paused before stopping
                     q?.Stop();
                     q?.Dispose(); 
                 }
@@ -707,7 +706,13 @@ namespace MarketConnectors.KuCoin
                 }
 
                 if (lob_update.SequenceStart > local_lob.Sequence + 1)
+                {
+                    lock (_buffersLock)
+                    {
+                        _eventBuffers[symbol]?.PauseConsumer(); // CRITICAL to allow stop
+                    }
                     throw new Exception("Detected sequence gap.");
+                }
 
                 if (lob_update.SequenceStart <= local_lob.Sequence + 1 && lob_update.SequenceEnd > local_lob.Sequence)
                 {
