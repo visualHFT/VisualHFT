@@ -689,7 +689,7 @@ namespace MarketConnectors.KuCoin
 
         private void UpdateOrderBook(KucoinStreamOrderBook lob_update, string symbol, DateTime ts)
         {
-            _orderBooksLock.EnterReadLock();
+            _orderBooksLock.EnterWriteLock();
 
             try
             {
@@ -716,6 +716,7 @@ namespace MarketConnectors.KuCoin
                             _eventBuffers[symbol]?.Clear(); // Clear buffer to avoid processing stale deltas
                         }
                     }
+                    _orderBooksLock.ExitWriteLock(); // Release lock before handling error
                     throw new Exception("Detected sequence gap.");
                 }
 
@@ -781,7 +782,8 @@ namespace MarketConnectors.KuCoin
             }
             finally
             {
-                _orderBooksLock.ExitReadLock();
+                if (_orderBooksLock.IsWriteLockHeld)
+                    _orderBooksLock.ExitWriteLock();
             }
         }
 
