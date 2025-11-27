@@ -141,7 +141,7 @@ namespace VisualHFT.Commons.Pools
                     // Pool exhausted - create new object (but log this for monitoring)
                     Interlocked.Increment(ref _totalCreated);
 
-                    if (_totalCreated % 5000 == 0) // Log every 5000 creations
+                    if (_totalCreated % 20000 == 0) // Log every 20000 creations
                     {
                         var typeName = typeof(T).Name;
                         string message = $"CustomObjectPool<{typeName}> exhausted - created {_totalCreated} total objects. Consider increasing pool size. Instantiated by: {_instantiator}";
