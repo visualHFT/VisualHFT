@@ -1,30 +1,31 @@
-﻿using Kraken.Net;
-using Kraken.Net.Clients;
-using Kraken.Net.Objects.Models;
-using Kraken.Net.Enums;
-using CryptoExchange.Net.Authentication;
+﻿using CryptoExchange.Net.Authentication;
+using CryptoExchange.Net.Interfaces;
 using CryptoExchange.Net.Objects;
+using CryptoExchange.Net.Objects.Sockets;
+using Kraken.Net;
+using Kraken.Net.Clients;
+using Kraken.Net.Enums;
+using Kraken.Net.Objects.Models;
+using Kraken.Net.Objects.Models.Socket;
 using MarketConnectors.Kraken.Model;
 using MarketConnectors.Kraken.UserControls;
 using MarketConnectors.Kraken.ViewModel;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using VisualHFT.Commons.PluginManager;
-using VisualHFT.UserSettings;
-using VisualHFT.Commons.Pools;
-using VisualHFT.Commons.Model;
 using VisualHFT.Commons.Helpers;
-using CryptoExchange.Net.Objects.Sockets;
-using VisualHFT.Enums;
-using VisualHFT.PluginManager;
-using Kraken.Net.Objects.Models.Socket;
 using VisualHFT.Commons.Interfaces;
-using Newtonsoft.Json.Linq;
-using System.IO;
+using VisualHFT.Commons.Model;
+using VisualHFT.Commons.PluginManager;
+using VisualHFT.Commons.Pools;
+using VisualHFT.Enums;
 using VisualHFT.Model;
+using VisualHFT.PluginManager;
+using VisualHFT.UserSettings;
 
 namespace MarketConnectors.Kraken
 {
@@ -114,7 +115,7 @@ namespace MarketConnectors.Kraken
                 _tradesBuffers.Add(symbol, new HelperCustomQueue<Tuple<string, KrakenTradeUpdate>>($"<Tuple<DateTime, string, KrakenOrderBookEntry>>_{this.Name.Replace(" Plugin", "")}", tradesBuffers_onReadAction, tradesBuffers_onErrorAction));
             }
 
-            await InitializeSnapshotsAsync();
+            //await InitializeSnapshotsAsync(); // Snapshots are now handled in the delta subscription callback
             await InitializeTradesAsync();
             await InitializeDeltasAsync();
             await InitializePingTimerAsync();
@@ -395,7 +396,12 @@ namespace MarketConnectors.Kraken
                                 }
                                 else
                                 {
-                                    UpdateOrderBookSnapshot(data.Data, normalizedSymbol);
+                                    if (!_localOrderBooks.ContainsKey(normalizedSymbol))
+                                    {
+                                        _localOrderBooks.Add(normalizedSymbol, null);
+                                    }
+                                    _localOrderBooks[normalizedSymbol] = ToOrderBookModel(data.Data, normalizedSymbol);
+                                    //UpdateOrderBookSnapshot(data.Data, normalizedSymbol);
                                 }
                             }
                             catch (Exception ex)
@@ -608,6 +614,16 @@ namespace MarketConnectors.Kraken
             }
 
         }
+        private VisualHFT.Model.OrderBook ToOrderBookModel(KrakenBookUpdate data, string symbol)
+        {
+            KrakenOrderBook snapshot = new KrakenOrderBook();
+            //transform KrakenBookUpdate to KrakenOrderBook
+            snapshot.Asks = data.Asks.Select(x => new KrakenOrderBookEntry() { Price = x.Price, Quantity = x.Quantity, Timestamp = DateTime.Now }).ToArray();
+            snapshot.Bids = data.Bids.Select(x => new KrakenOrderBookEntry() { Price = x.Price, Quantity = x.Quantity, Timestamp = DateTime.Now }).ToArray();
+
+
+            return ToOrderBookModel(snapshot, symbol);
+        }
         private VisualHFT.Model.OrderBook ToOrderBookModel(KrakenOrderBook data, string symbol)
         {
             var identifiedPriceDecimalPlaces = RecognizeDecimalPlacesAutomatically(data.Asks.Select(x => x.Price));
@@ -662,7 +678,6 @@ namespace MarketConnectors.Kraken
             {
                 return;
             }
-
             lob.Clear(); //reset order book
             foreach (var ask in data.Asks)
             {
@@ -701,11 +716,13 @@ namespace MarketConnectors.Kraken
                 {
                     foreach (var item in lob_update.Bids)
                     {
+                        if (item.Quantity == 0 && item.Price == 0 || item.Quantity < 0)
+                            continue;
                         if (item.Quantity != 0)
                         {
                             local_lob.AddOrUpdateLevel(new DeltaBookItem()
                             {
-                                MDUpdateAction = eMDUpdateAction.New,
+                                MDUpdateAction = eMDUpdateAction.Change,
                                 Price = (double)item.Price,
                                 Size = (double)item.Quantity,
                                 IsBid = true,
@@ -727,11 +744,13 @@ namespace MarketConnectors.Kraken
                     }
                     foreach (var item in lob_update.Asks)
                     {
+                        if (item.Quantity == 0 && item.Price == 0 || item.Quantity < 0)
+                            continue;
                         if (item.Quantity != 0)
                         {
                             local_lob.AddOrUpdateLevel(new DeltaBookItem()
                             {
-                                MDUpdateAction = eMDUpdateAction.New,
+                                MDUpdateAction = eMDUpdateAction.None,
                                 Price = (double)item.Price,
                                 Size = (double)item.Quantity,
                                 IsBid = false,
