@@ -5,6 +5,7 @@ using MarketConnectors.BitStamp.Model;
 using MarketConnectors.BitStamp.UserControls;
 using MarketConnectors.BitStamp.ViewModel;
 using Newtonsoft.Json;
+using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using VisualHFT.Commons.Model;
 using VisualHFT.Commons.PluginManager;
@@ -20,13 +21,19 @@ namespace MarketConnectors.Gemini
 {
     public class BitStampPlugin : BasePluginDataRetriever
     {
-        private new bool _disposed = false; // to track whether the object has been disposed
-
+        private new bool _disposed = false;
+        private readonly SemaphoreSlim _startStopLock = new SemaphoreSlim(1, 1); // ✅ FIX: Add synchronization
+        private bool isReconnecting = false; // ✅ FIX: Add reconnection flag
 
         private Timer _heartbeatTimer;
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
-        private Dictionary<string, VisualHFT.Model.OrderBook> _localOrderBooks = new Dictionary<string, VisualHFT.Model.OrderBook>();
 
+        private readonly ConcurrentDictionary<string, VisualHFT.Model.OrderBook> _localOrderBooks
+            = new ConcurrentDictionary<string, VisualHFT.Model.OrderBook>();
+
+        private IDisposable? _reconnectionSubscription;
+        private IDisposable? _disconnectionSubscription;
+        private IDisposable? _messageSubscription;
 
         private PlugInSettings? _settings;
         public override string Name { get; set; } = "BitStamp";
@@ -41,6 +48,7 @@ namespace MarketConnectors.Gemini
         WebsocketClient? _ws;
 
         BitStampHttpClient bitstampHttpClient;
+
         public BitStampPlugin()
         {
             _parser = new JsonParser();
@@ -50,9 +58,11 @@ namespace MarketConnectors.Gemini
                 DateParseHandling = DateParseHandling.None,
                 DateFormatString = "yyyy.MM.dd-HH.mm.ss.ffffff"
             };
-            // Initialize the timer
-            _heartbeatTimer = new Timer(CheckConnectionStatus, null, TimeSpan.Zero, TimeSpan.FromSeconds(5)); // Check every 5 seconds 
+            _heartbeatTimer = new Timer(CheckConnectionStatus, null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
             bitstampHttpClient = new BitStampHttpClient();
+
+            // ✅ FIX: Set reconnection action
+            SetReconnectionAction(InternalStartAsync);
         }
 
         ~BitStampPlugin()
@@ -60,97 +70,13 @@ namespace MarketConnectors.Gemini
             Dispose(false);
         }
 
-
         public override async Task StartAsync()
         {
-            await base.StartAsync();//call the base first 
-            
-            await InitializeSnapshotAsync();
+            await base.StartAsync();
 
-            var symbols = GetAllNonNormalizedSymbols();
-            List<string> channelsToSubscribe = new List<string>();
-
-            foreach (var symbol in symbols)
-            {
-
-                channelsToSubscribe.Add("diff_order_book_" + symbol);
-                channelsToSubscribe.Add("live_trades_" + symbol);
-            }
             try
             {
-                await Task.Run(async () =>
-                {
-                    var exitEvent = new ManualResetEvent(false);
-                    //https://www.bitstamp.net/websocket/v2/
-                    var url = new Uri(_settings.WebSocketHostName);
-                    using (_ws = new WebsocketClient(url))
-                    {
-                        _ws.ReconnectTimeout = TimeSpan.FromSeconds(30);
-                        _ws.ReconnectionHappened.Subscribe(info =>
-                        {
-                            if (info.Type == ReconnectionType.Error)
-                            {
-                                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
-                                Status = ePluginStatus.STOPPED_FAILED;
-                            }
-                            else if (info.Type == ReconnectionType.Initial)
-                            {
-                                foreach (var symbol in GetAllNonNormalizedSymbols())
-                                {
-                                    var normalizedSymbol = GetNormalizedSymbol(symbol);
-                                    if (!_localOrderBooks.ContainsKey(normalizedSymbol))
-                                    {
-                                        _localOrderBooks.Add(normalizedSymbol, null);
-                                    }
-                                }
-                            }
-
-                        });
-                        _ws.DisconnectionHappened.Subscribe(disconnected =>
-                        {
-                            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED));
-                            Status = ePluginStatus.STOPPED_FAILED;
-
-                        });
-
-                        _ws.MessageReceived.Subscribe(async msg =>
-                        {
-                            try
-                            {
-                                string data = msg.ToString();
-                                HandleMessage(data, DateTime.Now);
-                                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
-                            }
-                            catch (Exception ex)
-                            {
-                                LogException(ex, "HandleMessage");
-                            }
-                        });
-                        try
-                        {
-                            await _ws.Start();
-                            log.Info($"Plugin has successfully started.");
-                            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
-                            foreach (var tosubscribe in channelsToSubscribe)
-                            {
-                                BitStampSubscriptions bitStampSubscriptions = new BitStampSubscriptions();
-                                bitStampSubscriptions.data = new Data();
-                                bitStampSubscriptions.data.channel = tosubscribe;
-                                string jsonToSubscribe = JsonConvert.SerializeObject(bitStampSubscriptions);
-                                _ws.Send(jsonToSubscribe);
-                                Thread.Sleep(1000);
-                            }
-                            Status = ePluginStatus.STARTED;
-                        }
-                        catch (Exception ex)
-                        {
-                            var _error = ex.Message;
-                            LogException(ex, _error);
-                            await HandleConnectionLost(_error, ex);
-                        }
-                        exitEvent.WaitOne();
-                    }
-                });
+                await InternalStartAsync();
             }
             catch (Exception ex)
             {
@@ -158,7 +84,118 @@ namespace MarketConnectors.Gemini
                 LogException(ex, _error);
                 await HandleConnectionLost(_error, ex);
             }
-            CancellationTokenSource source = new CancellationTokenSource();
+        }
+
+        // ✅ FIX: Add InternalStartAsync for reconnection
+        public async Task InternalStartAsync()
+        {
+            // ✅ FIX: Acquire lock to prevent concurrent start/stop
+            await _startStopLock.WaitAsync();
+            try
+            {
+                await ClearAsync();
+
+                await InitializeSnapshotAsync();
+
+                var symbols = GetAllNonNormalizedSymbols();
+                List<string> channelsToSubscribe = new List<string>();
+
+                foreach (var symbol in symbols)
+                {
+                    channelsToSubscribe.Add("diff_order_book_" + symbol);
+                    channelsToSubscribe.Add("live_trades_" + symbol);
+                }
+
+                var url = new Uri(_settings.WebSocketHostName);
+                _ws = new WebsocketClient(url);
+                _ws.ReconnectTimeout = TimeSpan.FromSeconds(30);
+
+                _reconnectionSubscription = _ws.ReconnectionHappened.Subscribe(info =>
+                {
+                    if (info.Type == ReconnectionType.Error)
+                    {
+                        RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED_FAILED));
+                        Status = ePluginStatus.STOPPED_FAILED;
+                    }
+                    else if (info.Type == ReconnectionType.Initial)
+                    {
+                        foreach (var symbol in GetAllNonNormalizedSymbols())
+                        {
+                            var normalizedSymbol = GetNormalizedSymbol(symbol);
+                            _localOrderBooks.TryAdd(normalizedSymbol, null);
+                        }
+                    }
+                });
+
+                // ✅ FIX: Add reconnection logic
+                _disconnectionSubscription = _ws.DisconnectionHappened.Subscribe(disconnected =>
+                {
+                    Status = ePluginStatus.STOPPED;
+                    if (isReconnecting)
+                        return;
+
+                    if (disconnected.CloseStatus == WebSocketCloseStatus.NormalClosure)
+                    {
+                        RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED));
+                    }
+                    else
+                    {
+                        var _error = $"Will reconnect. Unhandled error while receiving market data.";
+                        LogException(disconnected?.Exception, _error);
+                        if (!isReconnecting)
+                        {
+                            isReconnecting = true;
+                            Task.Run(async () =>
+                            {
+                                await HandleConnectionLost(disconnected.CloseStatusDescription, disconnected.Exception);
+                                isReconnecting = false;
+                            });
+                        }
+                    }
+                });
+
+                // ✅ FIX: Add reconnection on exception
+                _messageSubscription = _ws.MessageReceived.Subscribe(async msg =>
+                {
+                    try
+                    {
+                        string data = msg.ToString();
+                        HandleMessage(data, DateTime.Now);
+                        RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
+                    }
+                    catch (Exception ex)
+                    {
+                        var _error = $"Will reconnect. Unhandled error in HandleMessage.";
+                        LogException(ex, _error);
+                        if (!isReconnecting)
+                        {
+                            isReconnecting = true;
+                            await HandleConnectionLost(_error, ex);
+                            isReconnecting = false;
+                        }
+                    }
+                });
+
+                await _ws.Start();
+                log.Info($"Plugin has successfully started.");
+                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
+
+                foreach (var tosubscribe in channelsToSubscribe)
+                {
+                    BitStampSubscriptions bitStampSubscriptions = new BitStampSubscriptions();
+                    bitStampSubscriptions.data = new Data();
+                    bitStampSubscriptions.data.channel = tosubscribe;
+                    string jsonToSubscribe = JsonConvert.SerializeObject(bitStampSubscriptions);
+                    _ws.Send(jsonToSubscribe);
+                    await Task.Delay(1000);
+                }
+
+                Status = ePluginStatus.STARTED;
+            }
+            finally
+            {
+                _startStopLock.Release();
+            }
         }
 
         public async Task InitializeSnapshotAsync()
@@ -166,33 +203,84 @@ namespace MarketConnectors.Gemini
             foreach (var symbol in GetAllNonNormalizedSymbols())
             {
                 var normalizedSymbol = GetNormalizedSymbol(symbol);
-                if (!_localOrderBooks.ContainsKey(normalizedSymbol))
-                {
-                    _localOrderBooks.Add(normalizedSymbol, null);
-                }
+
+                _localOrderBooks.TryAdd(normalizedSymbol, null);
+
                 var response = await bitstampHttpClient.InitializeSnapshotAsync(symbol);
                 if (response != null)
                 {
-                    _localOrderBooks[normalizedSymbol] = ToOrderBookModel(response, normalizedSymbol);
+                    var orderBook = ToOrderBookModel(response, normalizedSymbol);
+                    _localOrderBooks[normalizedSymbol] = orderBook;
                 }
-
             }
+        }
 
+        private async Task ClearAsync()
+        {
+            _reconnectionSubscription?.Dispose();
+            _disconnectionSubscription?.Dispose();
+            _messageSubscription?.Dispose();
+
+            // ✅ FIX: Dispose timer safely
+            var timer = Interlocked.Exchange(ref _heartbeatTimer, null);
+            timer?.Dispose();
+
+            var orderBooksToDispose = _localOrderBooks.Values.ToArray();
+            foreach (var lob in orderBooksToDispose)
+            {
+                try
+                {
+                    lob?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    log.Debug($"Error disposing order book: {ex.Message}");
+                }
+            }
+            _localOrderBooks.Clear();
         }
 
         public override async Task StopAsync()
         {
-            Status = ePluginStatus.STOPPING;
-            log.Info($"{this.Name} is stopping.");
+            // ✅ FIX: Acquire lock
+            await _startStopLock.WaitAsync();
+            try
+            {
+                Status = ePluginStatus.STOPPING;
+                log.Info($"{this.Name} is stopping.");
 
+                await ClearAsync();
 
-            if (_ws != null && !_ws.IsRunning)
-                await _ws.Stop(WebSocketCloseStatus.NormalClosure, "Manual CLosing");
-            //reset models
-            RaiseOnDataReceived(new List<VisualHFT.Model.OrderBook>());
-            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED));
+                if (_ws != null && _ws.IsRunning)
+                {
+                    try
+                    {
+                        await _ws.Stop(WebSocketCloseStatus.NormalClosure, "Manual Closing");
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        log.Debug("WebSocket already disposed, ignoring stop request");
+                    }
+                }
 
-            await base.StopAsync();
+                try
+                {
+                    _ws?.Dispose();
+                }
+                catch (ObjectDisposedException)
+                {
+                    log.Debug("WebSocket already disposed, ignoring disposal");
+                }
+
+                RaiseOnDataReceived(new List<VisualHFT.Model.OrderBook>());
+                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED));
+
+                await base.StopAsync();
+            }
+            finally
+            {
+                _startStopLock.Release();
+            }
         }
 
         private VisualHFT.Model.OrderBook ToOrderBookModel(InitialResponse data, string symbol)
@@ -203,63 +291,20 @@ namespace MarketConnectors.Gemini
             lob.ProviderID = _settings.Provider.ProviderID;
             lob.ProviderName = _settings.Provider.ProviderName;
             lob.SizeDecimalPlaces = RecognizeDecimalPlacesAutomatically(data.asks.Select(x => double.Parse(x[1])));
-            /*
-                Initialize the Limit Order Book "only" in this method.
-                Do not load the snapshot data, since it will be given at deltas subscription in the first message.
-                So, just initialize the LOB hete
-             */
 
-
-            /*
-            var _asks = new List<VisualHFT.Model.BookItem>();
-            var _bids = new List<VisualHFT.Model.BookItem>();
-            data.asks.ToList().ForEach(x =>
-            {
-                _asks.Add(new VisualHFT.Model.BookItem()
-                {
-                    IsBid = false,
-                    Price = double.Parse(x[0]),
-                    Size = double.Parse(x[1]),
-                    LocalTimeStamp = DateTime.Now,
-                    ServerTimeStamp = DateTime.Now,
-                    Symbol = lob.Symbol,
-                    PriceDecimalPlaces = lob.PriceDecimalPlaces,
-                    SizeDecimalPlaces = lob.SizeDecimalPlaces,
-                    ProviderID = lob.ProviderID,
-                });
-            });
-            data.bids.ToList().ForEach(x =>
-            {
-                _bids.Add(new VisualHFT.Model.BookItem()
-                {
-                    IsBid = true,
-                    Price = double.Parse(x[0]),
-                    Size = double.Parse(x[1]),
-                    LocalTimeStamp = DateTime.Now,
-                    ServerTimeStamp = DateTime.Now,
-                    Symbol = lob.Symbol,
-                    PriceDecimalPlaces = lob.PriceDecimalPlaces,
-                    SizeDecimalPlaces = lob.SizeDecimalPlaces,
-                    ProviderID = lob.ProviderID,
-                });
-            });
-
-            lob.LoadData(
-                _asks.OrderBy(x => x.Price).Take(_settings.DepthLevels),
-                _bids.OrderByDescending(x => x.Price).Take(_settings.DepthLevels)
-                );
-            */
             return lob;
         }
 
         private void HandleMessage(string marketData, DateTime serverTime)
         {
-            string message = marketData; 
+            string message = marketData;
             dynamic data = JsonConvert.DeserializeObject<dynamic>(message);
+
             if (data.@event == "data")
             {
                 BitStampOrderBook type = JsonConvert.DeserializeObject<BitStampOrderBook>(message);
-                if (type.@event.ToLower().Equals("data"))
+
+                if (type.@event.Equals("data", StringComparison.OrdinalIgnoreCase))
                 {
                     string symbol = string.Empty;
                     if (type.channel.Split('_').Length > 3)
@@ -271,20 +316,23 @@ namespace MarketConnectors.Gemini
                         symbol = GetNormalizedSymbol(type.channel.Split('_')[2]);
                     }
 
-                    if (!_localOrderBooks.ContainsKey(symbol))
+                    if (!_localOrderBooks.TryGetValue(symbol, out var local_lob))
                         return;
 
-                    var local_lob = _localOrderBooks[symbol];
                     if (local_lob == null)
                     {
-                        local_lob = new OrderBook();
+                        log.Warn($"OrderBook for {symbol} is null, skipping update");
+                        return;
                     }
 
                     serverTime = DateTimeOffset.FromUnixTimeMilliseconds(type.data.microtimestamp / 1000).LocalDateTime;
+                    var now = DateTime.Now;
+
                     foreach (var item in type.data.bids)
                     {
                         var _price = double.Parse(item[0]);
                         var _size = double.Parse(item[1]);
+
                         if (_size != 0)
                         {
                             local_lob.AddOrUpdateLevel(new DeltaBookItem()
@@ -293,7 +341,7 @@ namespace MarketConnectors.Gemini
                                 Price = _price,
                                 Size = _size,
                                 IsBid = true,
-                                LocalTimeStamp = DateTime.Now,
+                                LocalTimeStamp = now,
                                 ServerTimeStamp = serverTime,
                                 Symbol = symbol
                             });
@@ -305,16 +353,18 @@ namespace MarketConnectors.Gemini
                                 MDUpdateAction = eMDUpdateAction.Delete,
                                 Price = _price,
                                 IsBid = true,
-                                LocalTimeStamp = DateTime.Now,
+                                LocalTimeStamp = now,
                                 ServerTimeStamp = serverTime,
                                 Symbol = symbol
                             });
                         }
                     }
+
                     foreach (var item in type.data.asks)
                     {
                         var _price = double.Parse(item[0]);
                         var _size = double.Parse(item[1]);
+
                         if (_size != 0)
                         {
                             local_lob.AddOrUpdateLevel(new DeltaBookItem()
@@ -323,7 +373,7 @@ namespace MarketConnectors.Gemini
                                 Price = _price,
                                 Size = _size,
                                 IsBid = false,
-                                LocalTimeStamp = DateTime.Now,
+                                LocalTimeStamp = now,
                                 ServerTimeStamp = serverTime,
                                 Symbol = symbol
                             });
@@ -335,40 +385,15 @@ namespace MarketConnectors.Gemini
                                 MDUpdateAction = eMDUpdateAction.Delete,
                                 Price = _price,
                                 IsBid = false,
-                                LocalTimeStamp = DateTime.Now,
+                                LocalTimeStamp = now,
                                 ServerTimeStamp = serverTime,
                                 Symbol = symbol
                             });
                         }
                     }
+
                     local_lob.LastUpdated = serverTime;
                     RaiseOnDataReceived(local_lob);
-
-                    //if (dataReceived.trades != null && dataReceived.trades.Count > 0)
-                    //{
-                    //    List<Trade> trades = new List<VisualHFT.Model.Trade>();
-                    //    foreach (var item in dataReceived.trades)
-                    //    {
-                    //        Trade trade = new Trade();
-                    //        trade.Timestamp = DateTimeOffset.FromUnixTimeMilliseconds(item.timestamp).DateTime;
-                    //        trade.Price = item.price;
-                    //        trade.Size = item.quantity;
-                    //        trade.Symbol = symbol;
-                    //        trade.ProviderId = _settings.Provider.ProviderID;
-                    //        trade.ProviderName = _settings.Provider.ProviderName;
-                    //        if (item.side.ToLower().Equals("buy"))
-                    //        {
-                    //            trade.IsBuy = true;
-                    //        }
-                    //        else if(item.side.ToLower().Equals("sell"))
-                    //        {
-                    //            trade.IsBuy = false;
-                    //        }
-                    //        trades.Add(trade);
-                    //    }
-                    //    tradeDataEvent.ParsedModel = trades;
-                    //    RaiseOnDataReceived(tradeDataEvent);
-                    //}
                 }
             }
             else if (data.@event == "heartbeat")
@@ -377,7 +402,6 @@ namespace MarketConnectors.Gemini
             }
             else if (data.@event == "trade")
             {
-
                 BitStampTrade type = JsonConvert.DeserializeObject<BitStampTrade>(message);
                 if (type != null && type.data != null)
                 {
@@ -392,6 +416,7 @@ namespace MarketConnectors.Gemini
                     {
                         symbol = GetNormalizedSymbol(type.channel.Split('_')[2]);
                     }
+
                     Trade trade = new Trade();
                     trade.Timestamp = serverTime;
                     trade.Price = type.data.price;
@@ -399,22 +424,19 @@ namespace MarketConnectors.Gemini
                     trade.Symbol = symbol;
                     trade.ProviderId = _settings.Provider.ProviderID;
                     trade.ProviderName = _settings.Provider.ProviderName;
-                    if (type.data.type == 0) //0 means buy
-                    {
-                        trade.IsBuy = true;
-                    }
-                    else if (type.data.type == 1) //1 means sell
-                    {
-                        trade.IsBuy = false;
-                    }
+                    trade.IsBuy = type.data.type == 0;
+
                     RaiseOnDataReceived(trade);
                 }
-                
             }
         }
+
         private void CheckConnectionStatus(object state)
         {
-            bool isConnected = _ws != null && _ws.IsRunning;
+            // ✅ FIX: Safe null check
+            var ws = _ws;
+            bool isConnected = ws != null && ws.IsRunning;
+
             if (isConnected)
             {
                 RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
@@ -422,10 +444,9 @@ namespace MarketConnectors.Gemini
             else
             {
                 RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED));
-
             }
-
         }
+
         public override object GetUISettings()
         {
             PluginSettingsView view = new PluginSettingsView();
@@ -448,21 +469,24 @@ namespace MarketConnectors.Gemini
                 SaveSettings();
                 ParseSymbols(string.Join(',', _settings.Symbols.ToArray()));
 
-                //run this because it will allow to reconnect with the new values
                 RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTING));
                 Status = ePluginStatus.STARTING;
-                Task.Run(async () => await HandleConnectionLost($"{this.Name} is starting (from reloading settings).", null, true));
 
-
+                // ✅ FIX: Proper async handling
+                isReconnecting = true;
+                Task.Run(async () =>
+                {
+                    await HandleConnectionLost($"{this.Name} is starting (from reloading settings).", null, true);
+                    isReconnecting = false;
+                });
             };
-            // Display the view, perhaps in a dialog or a new window.
+
             view.DataContext = viewModel;
             return view;
         }
 
         protected override void InitializeDefaultSettings()
-        {    
-
+        {
             _settings = new PlugInSettings()
             {
                 ApiKey = "",
@@ -471,10 +495,11 @@ namespace MarketConnectors.Gemini
                 WebSocketHostName = "wss://ws.bitstamp.net",
                 DepthLevels = 10,
                 Provider = new VisualHFT.Model.Provider() { ProviderID = 6, ProviderName = "BitStamp" },
-                Symbols = new List<string>() { "btcusd(BTC/USD)", "ethusd(ETH/USD)" } // Add more symbols as needed
+                Symbols = new List<string>() { "btcusd(BTC/USD)", "ethusd(ETH/USD)" }
             };
             SaveToUserSettings(_settings);
         }
+
         protected override void LoadSettings()
         {
             _settings = LoadFromUserSettings<PlugInSettings>();
@@ -482,16 +507,18 @@ namespace MarketConnectors.Gemini
             {
                 InitializeDefaultSettings();
             }
-            if (_settings.Provider == null) //To prevent back compability with older setting formats
+            if (_settings.Provider == null)
             {
                 _settings.Provider = new VisualHFT.Model.Provider() { ProviderID = 6, ProviderName = "BitStamp" };
             }
-            ParseSymbols(string.Join(',', _settings.Symbols.ToArray())); //Utilize normalization function
+            ParseSymbols(string.Join(',', _settings.Symbols.ToArray()));
         }
+
         protected override void SaveSettings()
         {
             SaveToUserSettings(_settings);
         }
+
         protected override void Dispose(bool disposing)
         {
             base.Dispose(disposing);
@@ -499,8 +526,15 @@ namespace MarketConnectors.Gemini
             {
                 if (disposing)
                 {
+                    _reconnectionSubscription?.Dispose();
+                    _disconnectionSubscription?.Dispose();
+                    _messageSubscription?.Dispose();
+
                     _ws?.Dispose();
                     _heartbeatTimer?.Dispose();
+
+                    // ✅ FIX: Dispose semaphore
+                    _startStopLock?.Dispose();
                 }
                 _disposed = true;
             }

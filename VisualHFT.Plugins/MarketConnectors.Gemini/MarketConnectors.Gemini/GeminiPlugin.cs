@@ -659,8 +659,15 @@ namespace MarketConnectors.Gemini
             }
 
             localuserOrder.LastUpdated = DateTime.Now;
-            localuserOrder.FilledPercentage = Math.Round((100 / localuserOrder.Quantity) * localuserOrder.FilledQuantity, 2);
-
+            // ✅ FIX: Correct order of operations to avoid floating-point errors
+            if (localuserOrder.Quantity > 0)
+            {
+                localuserOrder.FilledPercentage = Math.Round((localuserOrder.FilledQuantity / localuserOrder.Quantity) * 100, 2);
+            }
+            else
+            {
+                localuserOrder.FilledPercentage = 0;
+            }
             RaiseOnDataReceived(localuserOrder);
         }
 
@@ -1005,6 +1012,8 @@ namespace MarketConnectors.Gemini
             //UPDATE VISUALHFT CORE & CREATE MODEL TO RETURN
             if (!modelList.Any())
                 throw new Exception("No data was found in the json file.");
+            
+            _localUserOrders.Clear();
             foreach (var item in modelList)
             {
                 UpdateUserOrderBook(item);
@@ -1012,93 +1021,9 @@ namespace MarketConnectors.Gemini
             //END UPDATE VISUALHFT CORE
 
 
-            //CREATE MODEL TO RETURN (First, identify the order that was sent, then use that one with the updated values)
-            var dicOrders = new Dictionary<long, VisualHFT.Model.Order>(); //we need to use dictionary to identify orders (because exchanges orderId is string) 
-
-
-
-            foreach (var item in modelList)
-            {
-
-                VisualHFT.Model.Order localuserOrder;
-                if (!dicOrders.ContainsKey(item.order_id))
-                {
-                    localuserOrder = new VisualHFT.Model.Order();
-                    localuserOrder.ClOrdId = item.client_order_id;
-                    localuserOrder.Currency = GetNormalizedSymbol(item.symbol);
-                    localuserOrder.OrderID = item.order_id;
-                    localuserOrder.ProviderId = _settings!.Provider.ProviderID;
-                    localuserOrder.ProviderName = _settings.Provider.ProviderName;
-                    localuserOrder.CreationTimeStamp = DateTimeOffset.FromUnixTimeSeconds(item.timestamp).DateTime;
-                    localuserOrder.Quantity = item.original_amount;
-                    localuserOrder.PricePlaced = item.price;
-                    localuserOrder.Symbol = GetNormalizedSymbol(item.symbol);
-                    localuserOrder.FilledQuantity = item.executed_amount;
-                    localuserOrder.TimeInForce = eORDERTIMEINFORCE.GTC;
-
-                    if (!string.IsNullOrEmpty(item.behavior))
-                    {
-                        localuserOrder.TimeInForce = item.behavior.ToLowerInvariant() switch
-                        {
-                            "immediate-or-cancel" => eORDERTIMEINFORCE.IOC,
-                            "fill-or-kill" => eORDERTIMEINFORCE.FOK,
-                            "maker-or-cancel" => eORDERTIMEINFORCE.MOK,
-                            _ => eORDERTIMEINFORCE.GTC
-                        };
-                    }
-                    dicOrders.Add(item.order_id, localuserOrder);
-                }
-                else
-                {
-
-                    localuserOrder = dicOrders[item.order_id];
-                }
-                localuserOrder.OrderType = eORDERTYPE.LIMIT;
-
-                localuserOrder.Quantity = item.original_amount;
-                localuserOrder.OrderType = item.order_type.ToLowerInvariant() switch
-                {
-                    "limit" => eORDERTYPE.LIMIT,
-                    "exchange limit" => eORDERTYPE.PEGGED,
-                    "market buy" => eORDERTYPE.MARKET,
-                    _ => eORDERTYPE.LIMIT
-                };
-
-                if (item.side.Equals("sell", StringComparison.OrdinalIgnoreCase))
-                {
-                    localuserOrder.BestAsk = item.price;
-                    localuserOrder.Side = eORDERSIDE.Sell;
-                }
-                else if (item.side.Equals("buy", StringComparison.OrdinalIgnoreCase))
-                {
-                    localuserOrder.PricePlaced = item.price;
-                    localuserOrder.BestBid = item.price;
-                    localuserOrder.Side = eORDERSIDE.Buy;
-                }
-
-                localuserOrder.Status = item.type.ToLowerInvariant() switch
-                {
-                    "accepted" => eORDERSTATUS.NEW,
-                    "fill" => eORDERSTATUS.PARTIALFILLED,
-                    "closed" => item.is_cancelled ? eORDERSTATUS.CANCELED : eORDERSTATUS.FILLED,
-                    "rejected" => eORDERSTATUS.REJECTED,
-                    "cancelled" => eORDERSTATUS.CANCELED,
-                    "cancel_rejected" => eORDERSTATUS.CANCELED,
-                    _ => localuserOrder.Status
-                };
-
-
-                localuserOrder.LastUpdated = DateTime.Now;
-                localuserOrder.FilledPercentage = Math.Round((100 / localuserOrder.Quantity) * localuserOrder.FilledQuantity, 2);
-                RaiseOnDataReceived(localuserOrder);
-
-            }
-
-            //END CREATE MODEL TO RETURN
-            return dicOrders.Values.ToList();
-
-            //ProcessUserOrderData
-
+            // ✅ FIX: Return the ACTUAL orders from _localUserOrders
+            // These orders have been processed by UpdateUserOrderBook and have correct calculations
+            return _localUserOrders.Values.ToList();
         }
     }
 }
