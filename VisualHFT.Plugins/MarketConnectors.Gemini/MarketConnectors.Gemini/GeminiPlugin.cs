@@ -5,6 +5,7 @@ using MarketConnectors.Gemini.UserControls;
 using MarketConnectors.Gemini.ViewModel;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
@@ -32,10 +33,20 @@ namespace MarketConnectors.Gemini
         private Timer _heartbeatTimer;
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
-        private Dictionary<string, VisualHFT.Model.OrderBook> _localOrderBooks = new Dictionary<string, VisualHFT.Model.OrderBook>();
-        private Dictionary<string, VisualHFT.Model.Order> _localUserOrders = new Dictionary<string, VisualHFT.Model.Order>();
+        // ✅ Thread-safe dictionary
+        private readonly ConcurrentDictionary<string, VisualHFT.Model.OrderBook> _localOrderBooks
+            = new ConcurrentDictionary<string, VisualHFT.Model.OrderBook>();
+
+        private readonly ConcurrentDictionary<string, VisualHFT.Model.Order> _localUserOrders
+            = new ConcurrentDictionary<string, VisualHFT.Model.Order>();
         private HelperCustomQueue<MarketUpdate> _eventBuffers;
 
+        private IDisposable? _socketReconnectionSubscription;
+        private IDisposable? _socketDisconnectionSubscription;
+        private IDisposable? _socketMessageSubscription;
+        private IDisposable? _userReconnectionSubscription;
+        private IDisposable? _userDisconnectionSubscription;
+        private IDisposable? _userMessageSubscription;
 
         private PlugInSettings? _settings;
         public override string Name { get; set; } = "Gemini";
@@ -100,8 +111,16 @@ namespace MarketConnectors.Gemini
 
         public async Task ClearAsync()
         {
+            // ✅ FIX: Unsubscribe before disposing
+            _socketReconnectionSubscription?.Dispose();
+            _socketDisconnectionSubscription?.Dispose();
+            _socketMessageSubscription?.Dispose();
+            _userReconnectionSubscription?.Dispose();
+            _userDisconnectionSubscription?.Dispose();
+            _userMessageSubscription?.Dispose();
+
             _heartbeatTimer?.Dispose();
-            
+
             // ✅ FIX: Pause and stop queue before clearing
             try
             {
@@ -113,13 +132,21 @@ namespace MarketConnectors.Gemini
             {
                 log.Debug($"Error disposing event buffers: {ex.Message}");
             }
-            
+
             //CLEAR LOB
             if (_localOrderBooks != null)
             {
-                foreach (var lob in _localOrderBooks)
+                var orderBooksToDispose = _localOrderBooks.Values.ToArray();
+                foreach (var lob in orderBooksToDispose)
                 {
-                    lob.Value?.Dispose();
+                    try
+                    {
+                        lob?.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        log.Debug($"Error disposing order book: {ex.Message}");
+                    }
                 }
                 _localOrderBooks.Clear();
             }
@@ -168,12 +195,11 @@ namespace MarketConnectors.Gemini
                     symbols = GetAllNonNormalizedSymbols()
                 });
 
-                var exitEvent = new ManualResetEvent(false);
                 var url = new Uri(_settings.WebSocketHostName);
                 _socketClient = new WebsocketClient(url);
 
                 _socketClient.ReconnectTimeout = TimeSpan.FromSeconds(10);
-                _socketClient.ReconnectionHappened.Subscribe(info =>
+                _socketReconnectionSubscription = _socketClient.ReconnectionHappened.Subscribe(info =>
                 {
                     if (info.Type == ReconnectionType.Error)
                     {
@@ -185,14 +211,12 @@ namespace MarketConnectors.Gemini
                         foreach (var symbol in GetAllNonNormalizedSymbols())
                         {
                             var normalizedSymbol = GetNormalizedSymbol(symbol);
-                            if (!_localOrderBooks.ContainsKey(normalizedSymbol))
-                            {
-                                _localOrderBooks.Add(normalizedSymbol, null);
-                            }
+                            // TryAdd is atomic - safe if called concurrently
+                            _localOrderBooks.TryAdd(normalizedSymbol, null);
                         }
                     }
                 });
-                _socketClient.DisconnectionHappened.Subscribe(disconnected =>
+                _socketDisconnectionSubscription = _socketClient.DisconnectionHappened.Subscribe(disconnected =>
                 {
                     Status = ePluginStatus.STOPPED;
                     if (isReconnecting)
@@ -215,7 +239,7 @@ namespace MarketConnectors.Gemini
                         }
                     }
                 });
-                _socketClient.MessageReceived.Subscribe(async msg =>
+                _socketMessageSubscription = _socketClient.MessageReceived.Subscribe(async msg =>
                 {
                     try
                     {
@@ -237,6 +261,7 @@ namespace MarketConnectors.Gemini
                         }
                     }
                 });
+                
                 try
                 {
                     await _socketClient.Start();
@@ -269,7 +294,6 @@ namespace MarketConnectors.Gemini
                     isReconnecting = false;
                 }
             }
-            CancellationTokenSource source = new CancellationTokenSource();
         }
         private string CreateSignature(string b64)
         {
@@ -312,10 +336,9 @@ namespace MarketConnectors.Gemini
                         return client;
                     });
 
-                    var exitEvent = new ManualResetEvent(false);
                     _userOrderEvents = new WebsocketClient(new Uri(_settings.WebSocketHostName_UserOrder), factory);
                     _userOrderEvents.ReconnectTimeout = TimeSpan.FromSeconds(10);
-                    _userOrderEvents.ReconnectionHappened.Subscribe(info =>
+                    _userReconnectionSubscription = _userOrderEvents.ReconnectionHappened.Subscribe(info =>
                     {
 
                         if (info.Type == ReconnectionType.Error)
@@ -329,7 +352,7 @@ namespace MarketConnectors.Gemini
                         }
 
                     });
-                    _userOrderEvents.DisconnectionHappened.Subscribe(disconnected =>
+                    _userDisconnectionSubscription = _userOrderEvents.DisconnectionHappened.Subscribe(disconnected =>
                     {
                         Status = ePluginStatus.STOPPED;
                         if (isReconnecting)
@@ -352,7 +375,7 @@ namespace MarketConnectors.Gemini
                             }
                         }
                     });
-                    _userOrderEvents.MessageReceived.Subscribe(async msg =>
+                    _userMessageSubscription = _userOrderEvents.MessageReceived.Subscribe(async msg =>
                     {
                         string data = msg.ToString();
                         HandleUserOrderMessage(data);
@@ -373,7 +396,6 @@ namespace MarketConnectors.Gemini
                 {
                     LogException(ex, "socketClient.MessageReceived");
                 }
-                CancellationTokenSource source = new CancellationTokenSource();
             }
         }
         private async Task InitializeSnapshotAsync()
@@ -381,16 +403,18 @@ namespace MarketConnectors.Gemini
             foreach (var symbol in GetAllNonNormalizedSymbols())
             {
                 var normalizedSymbol = GetNormalizedSymbol(symbol);
-                if (!_localOrderBooks.ContainsKey(normalizedSymbol))
-                {
-                    _localOrderBooks.Add(normalizedSymbol, null);
-                }
+
+                // Add placeholder (null is fine, will be replaced)
+                _localOrderBooks.TryAdd(normalizedSymbol, null);
+
                 var response = await geminiHttpClient.InitializeSnapshotAsync(symbol, _settings.DepthLevels);
+
                 if (response != null)
                 {
-                    _localOrderBooks[normalizedSymbol] = ToOrderBookModel(response, normalizedSymbol);
+                    var orderBook = ToOrderBookModel(response, normalizedSymbol);
+                    // Atomic replace
+                    _localOrderBooks[normalizedSymbol] = orderBook;
                 }
-
             }
         }
 
@@ -400,8 +424,8 @@ namespace MarketConnectors.Gemini
             log.Info($"{this.Name} is stopping.");
 
             await ClearAsync();
-            
-            // ✅ FIX: Add try-catch and check if client is running before stopping
+
+            // ✅ Dispose market data WebSocket
             if (_socketClient != null && _socketClient.IsRunning)
             {
                 try
@@ -410,11 +434,10 @@ namespace MarketConnectors.Gemini
                 }
                 catch (ObjectDisposedException)
                 {
-                    // Client already disposed during reconnection, safe to ignore
                     log.Debug("Socket client already disposed, ignoring stop request");
                 }
             }
-            
+
             // ✅ FIX: Safe disposal with try-catch
             try
             {
@@ -425,7 +448,28 @@ namespace MarketConnectors.Gemini
                 // Already disposed, safe to ignore
                 log.Debug("Socket client already disposed, ignoring disposal");
             }
-            
+
+            if (_userOrderEvents != null && _userOrderEvents.IsRunning)
+            {
+                try
+                {
+                    await _userOrderEvents.Stop(WebSocketCloseStatus.NormalClosure, "Manual Closing");
+                }
+                catch (ObjectDisposedException)
+                {
+                    log.Debug("User order events client already disposed, ignoring stop request");
+                }
+            }
+
+            try
+            {
+                _userOrderEvents?.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+                log.Debug("User order events client already disposed, ignoring disposal");
+            }
+
             RaiseOnDataReceived(new List<VisualHFT.Model.OrderBook>());
             RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED));
             await base.StopAsync();
@@ -542,202 +586,147 @@ namespace MarketConnectors.Gemini
 
         private void UpdateUserOrderBook(UserOrderData item)
         {
-            VisualHFT.Model.Order localuserOrder;
-            if (!this._localUserOrders.ContainsKey(item.client_order_id))
+            var localuserOrder = _localUserOrders.GetOrAdd(item.client_order_id, _ =>
             {
-                localuserOrder = new VisualHFT.Model.Order();
-                localuserOrder.ClOrdId = item.client_order_id;
-                localuserOrder.Currency = GetNormalizedSymbol(item.symbol);
-                localuserOrder.OrderID = item.order_id;
-                localuserOrder.ProviderId = _settings!.Provider.ProviderID;
-                localuserOrder.ProviderName = _settings.Provider.ProviderName;
-                localuserOrder.CreationTimeStamp = DateTimeOffset.FromUnixTimeSeconds(item.timestamp).DateTime;
-                localuserOrder.Quantity = item.original_amount;
-                localuserOrder.PricePlaced = item.price;
-                localuserOrder.Symbol = GetNormalizedSymbol(item.symbol);
-                localuserOrder.FilledQuantity = item.executed_amount;
-                localuserOrder.TimeInForce = eORDERTIMEINFORCE.GTC;
+                var order = new VisualHFT.Model.Order
+                {
+                    ClOrdId = item.client_order_id,
+                    Currency = GetNormalizedSymbol(item.symbol),
+                    OrderID = item.order_id,
+                    ProviderId = _settings!.Provider.ProviderID,
+                    ProviderName = _settings.Provider.ProviderName,
+                    CreationTimeStamp = DateTimeOffset.FromUnixTimeSeconds(item.timestamp).DateTime,
+                    Quantity = item.original_amount,
+                    PricePlaced = item.price,
+                    Symbol = GetNormalizedSymbol(item.symbol),
+                    FilledQuantity = item.executed_amount,
+                    TimeInForce = eORDERTIMEINFORCE.GTC
+                };
 
+                // Set TimeInForce based on behavior
                 if (!string.IsNullOrEmpty(item.behavior))
                 {
-                    if (item.behavior.ToLower().Equals("immediate-or-cancel"))
+                    order.TimeInForce = item.behavior.ToLowerInvariant() switch
                     {
-                        localuserOrder.TimeInForce = eORDERTIMEINFORCE.IOC;
-                    }
-                    else if (item.behavior.ToLower().Equals("fill-or-kill"))
-                    {
-                        localuserOrder.TimeInForce = eORDERTIMEINFORCE.FOK;
-                    }
-                    else if (item.behavior.ToLower().Equals("maker-or-cancel"))
-                    {
-                        localuserOrder.TimeInForce = eORDERTIMEINFORCE.MOK;
-                    }
+                        "immediate-or-cancel" => eORDERTIMEINFORCE.IOC,
+                        "fill-or-kill" => eORDERTIMEINFORCE.FOK,
+                        "maker-or-cancel" => eORDERTIMEINFORCE.MOK,
+                        _ => eORDERTIMEINFORCE.GTC
+                    };
                 }
-                this._localUserOrders.Add(item.client_order_id, localuserOrder);
-            }
-            else
-            {
 
-                localuserOrder = this._localUserOrders[item.client_order_id];
-            }
-            localuserOrder.OrderType = eORDERTYPE.LIMIT;
+                return order;
+            });
+
+            // Update mutable properties (⚠️ Order object itself may need locking if accessed concurrently)
+            localuserOrder.OrderType = item.order_type.ToLowerInvariant() switch
+            {
+                "limit" => eORDERTYPE.LIMIT,
+                "exchange limit" => eORDERTYPE.PEGGED,
+                "market buy" => eORDERTYPE.MARKET,
+                _ => eORDERTYPE.LIMIT
+            };
 
             localuserOrder.Quantity = item.original_amount;
-            if (item.order_type.ToLower().Equals("limit"))
-            {
-                localuserOrder.OrderType = eORDERTYPE.LIMIT;
-            }
-            else if (item.order_type.ToLower().Equals("exchange limit"))
-            {
-                localuserOrder.OrderType = eORDERTYPE.PEGGED;
-            }
-            else if (item.order_type.ToLower().Equals("market buy"))
-            {
-                localuserOrder.OrderType = eORDERTYPE.MARKET;
-            }
 
-            if (item.side.ToLower().Equals("sell"))
+            if (item.side.Equals("sell", StringComparison.OrdinalIgnoreCase))
             {
                 localuserOrder.BestAsk = item.price;
                 localuserOrder.Side = eORDERSIDE.Sell;
-
             }
-            else if (item.side.ToLower().Equals("buy"))
+            else if (item.side.Equals("buy", StringComparison.OrdinalIgnoreCase))
             {
                 localuserOrder.PricePlaced = item.price;
                 localuserOrder.BestBid = item.price;
                 localuserOrder.Side = eORDERSIDE.Buy;
-
             }
 
-            if (item.type.ToLower().Equals("accepted"))
+            // Update status
+            localuserOrder.Status = item.type.ToLowerInvariant() switch
             {
-                localuserOrder.Status = eORDERSTATUS.NEW;
-            }
-            else if (item.type.ToLower().Equals("fill"))
+                "accepted" => eORDERSTATUS.NEW,
+                "fill" => eORDERSTATUS.PARTIALFILLED,
+                "closed" => item.is_cancelled ? eORDERSTATUS.CANCELED : eORDERSTATUS.FILLED,
+                "rejected" => eORDERSTATUS.REJECTED,
+                "cancelled" => eORDERSTATUS.CANCELED,
+                "cancel_rejected" => eORDERSTATUS.CANCELED,
+                _ => localuserOrder.Status
+            };
+
+            if (item.type.Equals("fill", StringComparison.OrdinalIgnoreCase))
             {
                 localuserOrder.FilledQuantity = item.executed_amount;
-                localuserOrder.Status = eORDERSTATUS.PARTIALFILLED;
             }
-            else if (item.type.ToLower().Equals("closed"))
-            {
-                localuserOrder.Status = eORDERSTATUS.FILLED;
-                if (item.is_cancelled)
-                {
-                    localuserOrder.Status = eORDERSTATUS.CANCELED;
 
-                }
-            }
-            else if (item.type.ToLower().Equals("rejected"))
-            {
-                localuserOrder.Status = eORDERSTATUS.REJECTED;
-            }
-            else if (item.type.ToLower().Equals("cancelled"))
-            {
-                localuserOrder.Status = eORDERSTATUS.CANCELED;
-            }
-            else if (item.type.ToLower().Equals("cancel_rejected"))
-            {
-                localuserOrder.Status = eORDERSTATUS.CANCELED;
-            }
-            if (!string.IsNullOrEmpty(item.behavior))
-            {
-                if (item.behavior.ToLower().Equals("immediate-or-cancel"))
-                {
-                    localuserOrder.TimeInForce = eORDERTIMEINFORCE.IOC;
-                }
-                else if (item.behavior.ToLower().Equals("fill-or-kill"))
-                {
-                    localuserOrder.TimeInForce = eORDERTIMEINFORCE.FOK;
-                }
-                else if (item.behavior.ToLower().Equals("maker-or-cancel"))
-                {
-                    localuserOrder.TimeInForce = eORDERTIMEINFORCE.MOK;
-                }
-            }
             localuserOrder.LastUpdated = DateTime.Now;
             localuserOrder.FilledPercentage = Math.Round((100 / localuserOrder.Quantity) * localuserOrder.FilledQuantity, 2);
+
             RaiseOnDataReceived(localuserOrder);
         }
-
 
         private void UpdateOrderBook(MarketUpdate lob_update, string symbol, DateTime serverTime)
         {
 
-            if (!_localOrderBooks.ContainsKey(symbol))
+            if (!_localOrderBooks.TryGetValue(symbol, out var local_lob))
                 return;
-            var local_lob = _localOrderBooks[symbol];
-            if (local_lob == null)//check if the order book is not initialized
+
+            if (local_lob == null)
             {
-                local_lob = new OrderBook();
+                log.Warn($"OrderBook for {symbol} is null, skipping update");
+                return;
             }
 
+
+            // Cache timestamp once
+            var now = DateTime.Now;
 
             foreach (var item in lob_update.Changes)
             {
-                bool isBid = item[0].ToLower().Equals("buy");
-                double.TryParse(item[1], out double _price);
-                double.TryParse(item[2], out double _qty);
+                bool isBid = item[0].Equals("buy", StringComparison.OrdinalIgnoreCase);
+                if (!double.TryParse(item[1], out double _price)) continue;
+                if (!double.TryParse(item[2], out double _qty)) continue;
 
-                if (isBid)
+                if (_qty == 0)
                 {
-                    if (_qty == 0)
+                    local_lob.DeleteLevel(new DeltaBookItem()
                     {
-                        local_lob.DeleteLevel(new DeltaBookItem() { Symbol = symbol, Price = _price, IsBid = true, LocalTimeStamp = DateTime.Now, ServerTimeStamp = DateTime.Now, MDUpdateAction = eMDUpdateAction.Delete });
-                    }
-                    else
-                    {
-                        local_lob.AddOrUpdateLevel(new DeltaBookItem()
-                        {
-                            Symbol = symbol,
-                            IsBid = true,
-                            LocalTimeStamp = DateTime.Now,
-                            ServerTimeStamp = serverTime,
-                            MDUpdateAction = eMDUpdateAction.New,
-                            Price = _price,
-                            Size = _qty,
-                        });
-                    }
+                        Symbol = symbol,
+                        Price = _price,
+                        IsBid = isBid,
+                        LocalTimeStamp = now,
+                        ServerTimeStamp = serverTime,
+                        MDUpdateAction = eMDUpdateAction.Delete
+                    });
                 }
                 else
                 {
-                    if (_qty == 0)
+                    local_lob.AddOrUpdateLevel(new DeltaBookItem()
                     {
-                        local_lob.DeleteLevel(new DeltaBookItem() { Symbol = symbol, Price = _price, IsBid = false, LocalTimeStamp = DateTime.Now, ServerTimeStamp = DateTime.Now, MDUpdateAction = eMDUpdateAction.Delete });
-                    }
-                    else
-                    {
-                        local_lob.AddOrUpdateLevel(new DeltaBookItem()
-                        {
-                            Symbol = symbol,
-                            IsBid = false,
-                            LocalTimeStamp = DateTime.Now,
-                            ServerTimeStamp = serverTime,
-                            MDUpdateAction = eMDUpdateAction.New,
-                            Price = _price,
-                            Size = _qty,
-                        });
-                    }
+                        Symbol = symbol,
+                        IsBid = isBid,
+                        LocalTimeStamp = now,
+                        ServerTimeStamp = serverTime,
+                        MDUpdateAction = eMDUpdateAction.New,
+                        Price = _price,
+                        Size = _qty,
+                    });
                 }
             }
-            local_lob.LastUpdated = null; //Set to null since Gemini does not provide timstamp of their messages
 
+            local_lob.LastUpdated = null; //Set to null since Gemini does not provide timstamp of their messages
             RaiseOnDataReceived(local_lob);
 
             if (lob_update.Trades != null)
             {
                 foreach (var item in lob_update.Trades)
                 {
-                    if (item.Type == "trade")
+                    if (item.Type.Equals("trade", StringComparison.OrdinalIgnoreCase))
                     {
                         UpdateTrades(item);
                     }
-                    else
-                    {
-                        Console.WriteLine("Type not recognized " + item.Type);
-                    }
                 }
             }
+
         }
 
         private void UpdateTrades(MarketConnectors.Gemini.Model.Trade item)
@@ -878,8 +867,23 @@ namespace MarketConnectors.Gemini
             {
                 if (disposing)
                 {
+                    // ✅ Dispose subscriptions first
+                    _socketReconnectionSubscription?.Dispose();
+                    _socketDisconnectionSubscription?.Dispose();
+                    _socketMessageSubscription?.Dispose();
+                    _userReconnectionSubscription?.Dispose();
+                    _userDisconnectionSubscription?.Dispose();
+                    _userMessageSubscription?.Dispose();
+
+                    // ✅ Dispose WebSocket clients
                     _socketClient?.Dispose();
+                    _userOrderEvents?.Dispose();
+
+                    // ✅ Dispose timer
                     _heartbeatTimer?.Dispose();
+
+                    // ✅ Dispose queue
+                    _eventBuffers?.Dispose();
                 }
                 _disposed = true;
             }
@@ -907,13 +911,14 @@ namespace MarketConnectors.Gemini
             _settings.DepthLevels = snapshotModel.MaxDepth; //force depth received
 
             var symbol = snapshotModel.Symbol;
+            var orderBook = ToOrderBookModel(localModel, symbol);
 
-            if (!_localOrderBooks.ContainsKey(symbol))
-            {
-                _localOrderBooks.Add(symbol, ToOrderBookModel(localModel, symbol));
-            }
-            else
-                _localOrderBooks[symbol] = ToOrderBookModel(localModel, symbol);
+            _localOrderBooks.AddOrUpdate(
+                symbol,
+                orderBook,
+                (key, oldValue) => orderBook
+            );
+
 
             //once called snapshots, we need to update the LOB
             List<List<string>> changes = new List<List<string>>();
@@ -933,10 +938,11 @@ namespace MarketConnectors.Gemini
                 Changes = changes,
             }, symbol, DateTime.Now);
 
-            _localOrderBooks[symbol].Sequence = sequence;// Gemini does not provide sequence numbers
-
-
-            RaiseOnDataReceived(_localOrderBooks[symbol]);
+            if (_localOrderBooks.TryGetValue(symbol, out var lob))
+            {
+                lob.Sequence = sequence;
+                RaiseOnDataReceived(lob);
+            }
 
         }
         public void InjectDeltaModel(List<DeltaBookItem> bidDeltaModel, List<DeltaBookItem> askDeltaModel)
@@ -1032,18 +1038,13 @@ namespace MarketConnectors.Gemini
 
                     if (!string.IsNullOrEmpty(item.behavior))
                     {
-                        if (item.behavior.ToLower().Equals("immediate-or-cancel"))
+                        localuserOrder.TimeInForce = item.behavior.ToLowerInvariant() switch
                         {
-                            localuserOrder.TimeInForce = eORDERTIMEINFORCE.IOC;
-                        }
-                        else if (item.behavior.ToLower().Equals("fill-or-kill"))
-                        {
-                            localuserOrder.TimeInForce = eORDERTIMEINFORCE.FOK;
-                        }
-                        else if (item.behavior.ToLower().Equals("maker-or-cancel"))
-                        {
-                            localuserOrder.TimeInForce = eORDERTIMEINFORCE.MOK;
-                        }
+                            "immediate-or-cancel" => eORDERTIMEINFORCE.IOC,
+                            "fill-or-kill" => eORDERTIMEINFORCE.FOK,
+                            "maker-or-cancel" => eORDERTIMEINFORCE.MOK,
+                            _ => eORDERTIMEINFORCE.GTC
+                        };
                     }
                     dicOrders.Add(item.order_id, localuserOrder);
                 }
@@ -1055,82 +1056,38 @@ namespace MarketConnectors.Gemini
                 localuserOrder.OrderType = eORDERTYPE.LIMIT;
 
                 localuserOrder.Quantity = item.original_amount;
-                if (item.order_type.ToLower().Equals("limit"))
+                localuserOrder.OrderType = item.order_type.ToLowerInvariant() switch
                 {
-                    localuserOrder.OrderType = eORDERTYPE.LIMIT;
-                }
-                else if (item.order_type.ToLower().Equals("exchange limit"))
-                {
-                    localuserOrder.OrderType = eORDERTYPE.PEGGED;
-                }
-                else if (item.order_type.ToLower().Equals("market buy"))
-                {
-                    localuserOrder.OrderType = eORDERTYPE.MARKET;
-                }
+                    "limit" => eORDERTYPE.LIMIT,
+                    "exchange limit" => eORDERTYPE.PEGGED,
+                    "market buy" => eORDERTYPE.MARKET,
+                    _ => eORDERTYPE.LIMIT
+                };
 
-                if (item.side.ToLower().Equals("sell"))
+                if (item.side.Equals("sell", StringComparison.OrdinalIgnoreCase))
                 {
                     localuserOrder.BestAsk = item.price;
                     localuserOrder.Side = eORDERSIDE.Sell;
-
                 }
-                else if (item.side.ToLower().Equals("buy"))
+                else if (item.side.Equals("buy", StringComparison.OrdinalIgnoreCase))
                 {
                     localuserOrder.PricePlaced = item.price;
                     localuserOrder.BestBid = item.price;
                     localuserOrder.Side = eORDERSIDE.Buy;
-
                 }
 
-                if (item.type.ToLower().Equals("accepted"))
+                localuserOrder.Status = item.type.ToLowerInvariant() switch
                 {
-                    localuserOrder.Status = eORDERSTATUS.NEW;
-                }
-                else if (item.type.ToLower().Equals("fill"))
-                {
-                    localuserOrder.FilledQuantity = item.executed_amount;
-                    localuserOrder.Status = eORDERSTATUS.PARTIALFILLED;
-                }
-                else if (item.type.ToLower().Equals("closed"))
-                {
-                    localuserOrder.Status = eORDERSTATUS.FILLED;
-                    if (item.is_cancelled)
-                    {
-                        localuserOrder.Status = eORDERSTATUS.CANCELED;
+                    "accepted" => eORDERSTATUS.NEW,
+                    "fill" => eORDERSTATUS.PARTIALFILLED,
+                    "closed" => item.is_cancelled ? eORDERSTATUS.CANCELED : eORDERSTATUS.FILLED,
+                    "rejected" => eORDERSTATUS.REJECTED,
+                    "cancelled" => eORDERSTATUS.CANCELED,
+                    "cancel_rejected" => eORDERSTATUS.CANCELED,
+                    _ => localuserOrder.Status
+                };
 
-                    }
-                }
-                else if (item.type.ToLower().Equals("rejected"))
-                {
-                    localuserOrder.Status = eORDERSTATUS.REJECTED;
-                }
-                else if (item.type.ToLower().Equals("cancelled"))
-                {
-                    localuserOrder.Status = eORDERSTATUS.CANCELED;
-                }
-                else if (item.type.ToLower().Equals("cancel_rejected"))
-                {
-                    localuserOrder.Status = eORDERSTATUS.CANCELED;
-                }
-                else if (item.type.ToLower().Equals("closed"))
-                {
 
-                }
-                if (!string.IsNullOrEmpty(item.behavior))
-                {
-                    if (item.behavior.ToLower().Equals("immediate-or-cancel"))
-                    {
-                        localuserOrder.TimeInForce = eORDERTIMEINFORCE.IOC;
-                    }
-                    else if (item.behavior.ToLower().Equals("fill-or-kill"))
-                    {
-                        localuserOrder.TimeInForce = eORDERTIMEINFORCE.FOK;
-                    }
-                    else if (item.behavior.ToLower().Equals("maker-or-cancel"))
-                    {
-                        localuserOrder.TimeInForce = eORDERTIMEINFORCE.MOK;
-                    }
-                }
                 localuserOrder.LastUpdated = DateTime.Now;
                 localuserOrder.FilledPercentage = Math.Round((100 / localuserOrder.Quantity) * localuserOrder.FilledQuantity, 2);
                 RaiseOnDataReceived(localuserOrder);
