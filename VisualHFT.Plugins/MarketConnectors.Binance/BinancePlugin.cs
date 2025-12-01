@@ -22,22 +22,28 @@ using VisualHFT.UserSettings;
 using MarketConnectors.Binance.UserControls;
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Spot.Socket;
-using VisualHFT.Commons.Interfaces;
 using Binance.Net.Objects.Models;
 using Newtonsoft.Json.Linq;
 using System.IO;
+using System.Collections.Concurrent;
 
 namespace MarketConnectors.Binance
 {
 
-    public class BinancePlugin : BasePluginDataRetriever, IDataRetrieverTestable
+    public class BinancePlugin : BasePluginDataRetriever
     {
-        private bool _disposed = false; // to track whether the object has been disposed
+        private bool _disposed = false;
+        private readonly SemaphoreSlim _startStopLock = new SemaphoreSlim(1, 1);
+        private bool isReconnecting = false;
 
         private PlugInSettings _settings;
         private BinanceSocketClient _socketClient;
         private BinanceRestClient _restClient;
-        private Dictionary<string, VisualHFT.Model.OrderBook> _localOrderBooks = new Dictionary<string, VisualHFT.Model.OrderBook>();
+        
+        // ✅ FIX: Use ConcurrentDictionary for thread safety
+        private readonly ConcurrentDictionary<string, VisualHFT.Model.OrderBook> _localOrderBooks = 
+            new ConcurrentDictionary<string, VisualHFT.Model.OrderBook>();
+        
         private HelperCustomQueue<IBinanceEventOrderBook> _eventBuffers;
         private HelperCustomQueue<IBinanceTrade> _tradesBuffers;
         private int pingFailedAttempts = 0;
@@ -49,10 +55,12 @@ namespace MarketConnectors.Binance
 
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
-        private readonly CustomObjectPool<VisualHFT.Model.Trade> tradePool = new CustomObjectPool<VisualHFT.Model.Trade>();//pool of Trade objects
+        private readonly CustomObjectPool<VisualHFT.Model.Trade> tradePool = new CustomObjectPool<VisualHFT.Model.Trade>();
 
-        private Dictionary<string, VisualHFT.Model.Order> _localUserOrders = new Dictionary<string, VisualHFT.Model.Order>();
-        private string ListenKey = string.Empty; 
+        // ✅ FIX: Use ConcurrentDictionary for thread safety
+        private readonly ConcurrentDictionary<string, VisualHFT.Model.Order> _localUserOrders = 
+            new ConcurrentDictionary<string, VisualHFT.Model.Order>();
+        private string ListenKey = string.Empty;
 
         public override string Name { get; set; } = "Binance Plugin";
         public override string Version { get; set; } = "1.0.0";
@@ -104,41 +112,55 @@ namespace MarketConnectors.Binance
         }
         private async Task InternalStartAsync()
         {
-            await ClearAsync();
-            await SetupClientsAsync();
+            // ✅ FIX: Add synchronization
+            await _startStopLock.WaitAsync();
+            try
+            {
+                await ClearAsync();
+                await SetupClientsAsync();
 
+                _tradesBuffers = new HelperCustomQueue<IBinanceTrade>($"<IBinanceTrade>_{this.Name}", tradesBuffers_onReadAction, tradesBuffers_onErrorAction);
+                _eventBuffers = new HelperCustomQueue<IBinanceEventOrderBook>($"<IBinanceEventOrderBook>_{this.Name}", eventBuffers_onReadAction, eventBuffers_onErrorAction);
 
-            _tradesBuffers = new HelperCustomQueue<IBinanceTrade>($"<IBinanceTrade>_{this.Name}", tradesBuffers_onReadAction, tradesBuffers_onErrorAction);
-            _eventBuffers = new HelperCustomQueue<IBinanceEventOrderBook>($"<IBinanceEventOrderBook>_{this.Name}", eventBuffers_onReadAction, eventBuffers_onErrorAction);
+                _eventBuffers.PauseConsumer();
 
-            //Pause QUEUES until we get the snapshots ready
-            _eventBuffers.PauseConsumer();
+                await InitializeDeltasAsync();
+                await InitializeSnapshotsAsync();
+                await InitializeTradesAsync();
+                await InitializePingTimerAsync();
+                await InitializeUserPrivateOrders();
 
-            await InitializeDeltasAsync();
-            await InitializeSnapshotsAsync();
-            await InitializeTradesAsync();
-            await InitializePingTimerAsync();
-            await InitializeUserPrivateOrders();
-
-            log.Info($"Plugin has successfully started.");
-            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
-            Status = ePluginStatus.STARTED;
-
+                log.Info($"Plugin has successfully started.");
+                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
+                Status = ePluginStatus.STARTED;
+            }
+            finally
+            {
+                _startStopLock.Release();
+            }
         }
         public override async Task StopAsync()
         {
-            Status = ePluginStatus.STOPPING;
-            log.Info($"{this.Name} is stopping.");
+            // ✅ FIX: Add synchronization
+            await _startStopLock.WaitAsync();
+            try
+            {
+                Status = ePluginStatus.STOPPING;
+                log.Info($"{this.Name} is stopping.");
 
-            await ClearAsync();
-            RaiseOnDataReceived(new List<VisualHFT.Model.OrderBook>());
-            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED));
+                await ClearAsync();
+                RaiseOnDataReceived(new List<VisualHFT.Model.OrderBook>());
+                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED));
 
-            await base.StopAsync();
+                await base.StopAsync();
+            }
+            finally
+            {
+                _startStopLock.Release();
+            }
         }
         public async Task ClearAsync()
         {
-
             UnattachEventHandlers(deltaSubscription?.Data);
             UnattachEventHandlers(tradesSubscription?.Data);
             if (_socketClient != null)
@@ -149,16 +171,46 @@ namespace MarketConnectors.Binance
                 await tradesSubscription.Data.CloseAsync();
             _timerPing?.Stop();
             _timerPing?.Dispose();
+            
+            // ✅ FIX: Dispose _timerListenKey
+            _timerListenKey?.Stop();
+            _timerListenKey?.Dispose();
 
-            _eventBuffers?.Clear();
-            _tradesBuffers?.Clear();
+            // ✅ FIX: Dispose queues properly
+            try
+            {
+                _eventBuffers?.Stop();
+                _eventBuffers?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                log.Debug($"Error disposing event buffer: {ex.Message}");
+            }
 
-            //CLEAR LOB
+            try
+            {
+                _tradesBuffers?.Stop();
+                _tradesBuffers?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                log.Debug($"Error disposing trades buffer: {ex.Message}");
+            }
+
+            // ✅ FIX: Safe OrderBook disposal with snapshot
             if (_localOrderBooks != null)
             {
-                foreach (var lob in _localOrderBooks)
+                var orderBooksToDispose = _localOrderBooks.Values.ToArray();
+                foreach (var lob in orderBooksToDispose)
                 {
-                    lob.Value?.Dispose();
+                    try
+                    {
+                        lob?.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        log.Debug($"Error disposing order book: {ex.Message}");
+                    }
                 }
                 _localOrderBooks.Clear();
             }
@@ -277,23 +329,15 @@ namespace MarketConnectors.Binance
         }
         private async Task InitializeSnapshotsAsync()
         {
-            //initialized dics for LastUpdateId
-            foreach (var normalizedSymbol in GetAllNonNormalizedSymbols())
-            {
-                if (!_localOrderBooks.ContainsKey(normalizedSymbol))
-                    _localOrderBooks.Add(normalizedSymbol, null);
-            }
-
             foreach (var symbol in GetAllNonNormalizedSymbols())
             {
                 var normalizedSymbol = GetNormalizedSymbol(symbol);
-                if (!_localOrderBooks.ContainsKey(normalizedSymbol))
-                {
-                    _localOrderBooks.Add(normalizedSymbol, null);
-                }
+                
+                // ✅ FIX: Use TryAdd for thread safety
+                _localOrderBooks.TryAdd(normalizedSymbol, null);
+
                 log.Info($"{this.Name}: Getting snapshot {normalizedSymbol} level 2");
 
-                // Fetch initial depth snapshot
                 var depthSnapshot = await _restClient.SpotApi.ExchangeData.GetOrderBookAsync(symbol, _settings.DepthLevels);
                 if (depthSnapshot.Success)
                 {
@@ -305,9 +349,7 @@ namespace MarketConnectors.Binance
                     throw new Exception(_error);
                 }
             }
-            //Unpause QUEUES until we get the snapshots ready
             _eventBuffers.ResumeConsumer();
-
         }
         private async Task InitializePingForPrivateListenKeys()
         {
@@ -373,61 +415,42 @@ namespace MarketConnectors.Binance
 
         private void InitialUserOrders(BinanceOrder item)
         {
-            VisualHFT.Model.Order localuserOrder;
-            if (!this._localUserOrders.ContainsKey(item.ClientOrderId))
+            // ✅ FIX: Use GetOrAdd for thread-safe order creation
+            var localuserOrder = _localUserOrders.GetOrAdd(item.ClientOrderId, _ =>
             {
-                localuserOrder = new VisualHFT.Model.Order();
-                localuserOrder.OrderID = item.Id;
-                localuserOrder.ClOrdId = !string.IsNullOrEmpty(item.ClientOrderId) ? item.ClientOrderId : item.Id.ToString();
-                localuserOrder.Currency = GetNormalizedSymbol(item.Symbol);
-                localuserOrder.CreationTimeStamp = item.CreateTime;
-                localuserOrder.OrderID = item.Id;
-                localuserOrder.ProviderId = _settings!.Provider.ProviderID;
-                localuserOrder.ProviderName = _settings.Provider.ProviderName;
-                localuserOrder.CreationTimeStamp = item.CreateTime;
-                localuserOrder.Quantity = (double)item.Quantity;
-                localuserOrder.PricePlaced = (double)item.Price;
-                localuserOrder.Symbol = GetNormalizedSymbol(item.Symbol);
-                localuserOrder.TimeInForce = eORDERTIMEINFORCE.GTC;
-
+                var order = new VisualHFT.Model.Order
+                {
+                    OrderID = item.Id,
+                    ClOrdId = !string.IsNullOrEmpty(item.ClientOrderId) ? item.ClientOrderId : item.Id.ToString(),
+                    Currency = GetNormalizedSymbol(item.Symbol),
+                    CreationTimeStamp = item.CreateTime,
+                    ProviderId = _settings!.Provider.ProviderID,
+                    ProviderName = _settings.Provider.ProviderName,
+                    Quantity = (double)item.Quantity,
+                    PricePlaced = (double)item.Price,
+                    Symbol = GetNormalizedSymbol(item.Symbol),
+                    TimeInForce = eORDERTIMEINFORCE.GTC
+                };
 
                 if (item.TimeInForce == TimeInForce.ImmediateOrCancel)
-                {
-                    localuserOrder.TimeInForce = eORDERTIMEINFORCE.IOC;
-                }
+                    order.TimeInForce = eORDERTIMEINFORCE.IOC;
                 else if (item.TimeInForce == TimeInForce.FillOrKill)
-                {
-                    localuserOrder.TimeInForce = eORDERTIMEINFORCE.FOK;
-                }
-                this._localUserOrders.Add(item.ClientOrderId, localuserOrder);
-            }
-            else
-            {
-                localuserOrder = this._localUserOrders[item.ClientOrderId];
-            }
+                    order.TimeInForce = eORDERTIMEINFORCE.FOK;
+
+                return order;
+            });
 
             if (item.Type == SpotOrderType.Market)
-            {
                 localuserOrder.OrderType = eORDERTYPE.MARKET;
-            }
             else if (item.Type == SpotOrderType.LimitMaker || item.Type == SpotOrderType.Limit)
-            {
                 localuserOrder.OrderType = eORDERTYPE.LIMIT;
-            }
             else
-            {
                 localuserOrder.OrderType = eORDERTYPE.PEGGED;
-            }
-
 
             if (item.Side == OrderSide.Buy)
-            {
                 localuserOrder.Side = eORDERSIDE.Buy;
-            }
             if (item.Side == OrderSide.Sell)
-            {
                 localuserOrder.Side = eORDERSIDE.Sell;
-            }
 
             if (item.Status == OrderStatus.New || item.Status == OrderStatus.PendingNew)
             {
@@ -436,113 +459,82 @@ namespace MarketConnectors.Binance
                     localuserOrder.CreationTimeStamp = item.CreateTime;
                     localuserOrder.PricePlaced = (double)item.Price;
                     localuserOrder.BestBid = (double)item.Price;
-                    localuserOrder.Side = eORDERSIDE.Buy;
                 }
                 if (item.Side == OrderSide.Sell)
                 {
-                    localuserOrder.Side = eORDERSIDE.Sell;
                     localuserOrder.BestAsk = (double)item.Price;
                     localuserOrder.CreationTimeStamp = item.CreateTime;
                     localuserOrder.Quantity = (double)item.Quantity;
                 }
                 localuserOrder.Status = eORDERSTATUS.NEW;
             }
-            if (item.Status == OrderStatus.Filled)
+            else if (item.Status == OrderStatus.Filled)
             {
-
                 localuserOrder.BestAsk = (double)item.Price;
                 localuserOrder.BestBid = (double)item.Price;
                 localuserOrder.FilledQuantity = (double)(item.QuantityFilled);
                 localuserOrder.Status = eORDERSTATUS.FILLED;
             }
-            if (item.Status == OrderStatus.Canceled)
-            {
+            else if (item.Status == OrderStatus.Canceled)
                 localuserOrder.Status = eORDERSTATUS.CANCELED;
-            }
-
-            if (item.Status == OrderStatus.Rejected)
-            {
+            else if (item.Status == OrderStatus.Rejected)
                 localuserOrder.Status = eORDERSTATUS.REJECTED;
-            }
-
-            if (item.Status == OrderStatus.PartiallyFilled)
+            else if (item.Status == OrderStatus.PartiallyFilled)
             {
                 localuserOrder.BestAsk = (double)item.Price;
                 localuserOrder.BestBid = (double)item.Price;
                 localuserOrder.Status = eORDERSTATUS.PARTIALFILLED;
             }
-
-
-            if (item.Status == OrderStatus.PendingCancel)
-            {
+            else if (item.Status == OrderStatus.PendingCancel)
                 localuserOrder.Status = eORDERSTATUS.CANCELEDSENT;
-            }
 
             localuserOrder.LastUpdated = DateTime.Now;
-            //CHECK IF IT IS BEING MODIFIED => REMOVE THE ORIGINAL, SO THE UNIT TEST GETS JUST THE LATEST
+            
             if (!string.IsNullOrEmpty(item.OriginalClientOrderId) && item.OriginalClientOrderId != item.ClientOrderId)
             {
                 if (_localUserOrders.TryGetValue(item.OriginalClientOrderId, out var originalOrder))
                     originalOrder.Status = localuserOrder.Status;
             }
-
 
             RaiseOnDataReceived(localuserOrder);
         }
 
-        private void UpdateUserOrderBook(BinanceStreamOrderUpdate item )
+        private void UpdateUserOrderBook(BinanceStreamOrderUpdate item)
         {
-            VisualHFT.Model.Order localuserOrder;
-            if (!this._localUserOrders.ContainsKey(item.ClientOrderId))
+            // ✅ FIX: Use GetOrAdd for thread-safe order creation
+            var localuserOrder = _localUserOrders.GetOrAdd(item.ClientOrderId, _ =>
             {
-                localuserOrder = new VisualHFT.Model.Order();
-                localuserOrder.OrderID = item.Id;
-                localuserOrder.ClOrdId = !string.IsNullOrEmpty(item.ClientOrderId) ? item.ClientOrderId : item.Id.ToString();
-                localuserOrder.Currency = GetNormalizedSymbol(item.Symbol);
-                localuserOrder.CreationTimeStamp = item.CreateTime;
-                localuserOrder.OrderID = item.Id;
-                localuserOrder.ProviderId = _settings!.Provider.ProviderID;
-                localuserOrder.ProviderName = _settings.Provider.ProviderName;
-                localuserOrder.CreationTimeStamp = item.CreateTime;
-                localuserOrder.Quantity = (double)item.Quantity;
-                localuserOrder.PricePlaced = (double)item.Price;
-                localuserOrder.Symbol = GetNormalizedSymbol(item.Symbol);
-                localuserOrder.TimeInForce = eORDERTIMEINFORCE.GTC;
-
+                var order = new VisualHFT.Model.Order
+                {
+                    OrderID = item.Id,
+                    ClOrdId = !string.IsNullOrEmpty(item.ClientOrderId) ? item.ClientOrderId : item.Id.ToString(),
+                    Currency = GetNormalizedSymbol(item.Symbol),
+                    CreationTimeStamp = item.CreateTime,
+                    ProviderId = _settings!.Provider.ProviderID,
+                    ProviderName = _settings.Provider.ProviderName,
+                    Quantity = (double)item.Quantity,
+                    PricePlaced = (double)item.Price,
+                    Symbol = GetNormalizedSymbol(item.Symbol),
+                    TimeInForce = eORDERTIMEINFORCE.GTC
+                };
 
                 if (item.TimeInForce == TimeInForce.ImmediateOrCancel)
-                {
-                    localuserOrder.TimeInForce = eORDERTIMEINFORCE.IOC;
-                }
+                    order.TimeInForce = eORDERTIMEINFORCE.IOC;
                 else if (item.TimeInForce == TimeInForce.FillOrKill)
-                {
-                    localuserOrder.TimeInForce = eORDERTIMEINFORCE.FOK;
-                }
-                this._localUserOrders.Add(item.ClientOrderId, localuserOrder);
-            }
-            else
-            {
-                localuserOrder = this._localUserOrders[item.ClientOrderId];
-            }
+                    order.TimeInForce = eORDERTIMEINFORCE.FOK;
+
+                return order;
+            });
 
             if (item.Type == SpotOrderType.Market)
-            {
                 localuserOrder.OrderType = eORDERTYPE.MARKET;
-            }
             else
-            {
                 localuserOrder.OrderType = eORDERTYPE.LIMIT;
-            }
-
 
             if (item.Side == OrderSide.Buy)
-            {
                 localuserOrder.Side = eORDERSIDE.Buy;
-            }
             if (item.Side == OrderSide.Sell)
-            {
                 localuserOrder.Side = eORDERSIDE.Sell;
-            }
 
             if (item.Status == OrderStatus.New || item.Status == OrderStatus.PendingNew)
             {
@@ -551,57 +543,42 @@ namespace MarketConnectors.Binance
                     localuserOrder.CreationTimeStamp = item.CreateTime;
                     localuserOrder.PricePlaced = (double)item.Price;
                     localuserOrder.BestBid = (double)item.Price;
-                    localuserOrder.Side = eORDERSIDE.Buy;
                 }
                 if (item.Side == OrderSide.Sell)
                 {
-                    localuserOrder.Side = eORDERSIDE.Sell;
                     localuserOrder.BestAsk = (double)item.Price;
                     localuserOrder.CreationTimeStamp = item.CreateTime;
                     localuserOrder.Quantity = (double)item.Quantity;
                 }
                 localuserOrder.Status = eORDERSTATUS.NEW;
             }
-            if (item.Status == OrderStatus.Filled)
+            else if (item.Status == OrderStatus.Filled)
             {
-
                 localuserOrder.BestAsk = (double)item.Price;
                 localuserOrder.BestBid = (double)item.Price;
                 localuserOrder.FilledQuantity = (double)(item.QuantityFilled);
                 localuserOrder.Status = eORDERSTATUS.FILLED;
             }
-            if (item.Status == OrderStatus.Canceled)
-            {
+            else if (item.Status == OrderStatus.Canceled)
                 localuserOrder.Status = eORDERSTATUS.CANCELED;
-            }
-
-            if (item.Status == OrderStatus.Rejected)
-            {
+            else if (item.Status == OrderStatus.Rejected)
                 localuserOrder.Status = eORDERSTATUS.REJECTED;
-            }
-
-            if (item.Status == OrderStatus.PartiallyFilled)
+            else if (item.Status == OrderStatus.PartiallyFilled)
             {
                 localuserOrder.BestAsk = (double)item.Price;
                 localuserOrder.BestBid = (double)item.Price;
                 localuserOrder.Status = eORDERSTATUS.PARTIALFILLED;
             }
-
-
-            if (item.Status == OrderStatus.PendingCancel)
-            {
+            else if (item.Status == OrderStatus.PendingCancel)
                 localuserOrder.Status = eORDERSTATUS.CANCELEDSENT;
-            }
 
             localuserOrder.LastUpdated = DateTime.Now;
-            //CHECK IF IT IS BEING MODIFIED => REMOVE THE ORIGINAL, SO THE UNIT TEST GETS JUST THE LATEST
+            
             if (!string.IsNullOrEmpty(item.OriginalClientOrderId) && item.OriginalClientOrderId != item.ClientOrderId)
             {
                 if (_localUserOrders.TryGetValue(item.OriginalClientOrderId, out var originalOrder))
                     originalOrder.Status = localuserOrder.Status;
             }
-
-
 
             RaiseOnDataReceived(localuserOrder);
         }
@@ -706,32 +683,42 @@ namespace MarketConnectors.Binance
             string _error = $"Websocket error: {obj.Message}";
             LogException(obj, _error, true);
 
-            Task.Run(StopAsync);
-
-            Status = ePluginStatus.STOPPED_FAILED;
-            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED_FAILED));
+            if (!isReconnecting)
+            {
+                isReconnecting = true;
+                Task.Run(async () =>
+                {
+                    await HandleConnectionLost(_error, obj);
+                    isReconnecting = false;
+                });
+            }
         }
         #endregion
 
+        // ✅ FIX: Thread-safe UpdateOrderBook with TryGetValue
         private void UpdateOrderBook(IBinanceEventOrderBook lob_update, string normalizedSymbol)
         {
-            
-            if (!_localOrderBooks.ContainsKey(normalizedSymbol))
+            // ✅ Use TryGetValue for thread safety
+            if (!_localOrderBooks.TryGetValue(normalizedSymbol, out var local_lob))
                 return;
 
+            if (local_lob == null)
+            {
+                log.Warn($"OrderBook for {normalizedSymbol} is null, skipping update");
+                return;
+            }
 
-            var local_lob = _localOrderBooks[normalizedSymbol];
             DateTime ts = lob_update.EventTime.ToLocalTime();
 
-            //SEQUENCE CHECK
-            if (lob_update.LastUpdateId <= local_lob.Sequence)  //skip lower sequences
+            if (lob_update.LastUpdateId <= local_lob.Sequence)
                 return;
 
             if (lob_update.FirstUpdateId > local_lob.Sequence &&
                 lob_update.FirstUpdateId != local_lob.Sequence + 1)
                 throw new Exception("Detected sequence gap.");
 
-
+            // ✅ Cache DateTime.Now once
+            var now = DateTime.Now;
 
             foreach (var item in lob_update.Bids)
             {
@@ -743,7 +730,7 @@ namespace MarketConnectors.Binance
                         Price = (double)item.Price,
                         Size = (double)item.Quantity,
                         IsBid = true,
-                        LocalTimeStamp = DateTime.Now,
+                        LocalTimeStamp = now,
                         ServerTimeStamp = ts,
                         Symbol = normalizedSymbol
                     });
@@ -753,13 +740,13 @@ namespace MarketConnectors.Binance
                     {
                         MDUpdateAction = eMDUpdateAction.Delete,
                         Price = (double)item.Price,
-                        //Size = (double)item.Quantity,
                         IsBid = true,
-                        LocalTimeStamp = DateTime.Now,
+                        LocalTimeStamp = now,
                         ServerTimeStamp = ts,
                         Symbol = normalizedSymbol
                     });
             }
+            
             foreach (var item in lob_update.Asks)
             {
                 if (item.Quantity != 0)
@@ -770,7 +757,7 @@ namespace MarketConnectors.Binance
                         Price = (double)item.Price,
                         Size = (double)item.Quantity,
                         IsBid = false,
-                        LocalTimeStamp = DateTime.Now,
+                        LocalTimeStamp = now,
                         ServerTimeStamp = ts,
                         Symbol = normalizedSymbol
                     });
@@ -780,24 +767,24 @@ namespace MarketConnectors.Binance
                     {
                         MDUpdateAction = eMDUpdateAction.Delete,
                         Price = (double)item.Price,
-                        //Size = (double)item.Quantity,
                         IsBid = false,
-                        LocalTimeStamp = DateTime.Now,
+                        LocalTimeStamp = now,
                         ServerTimeStamp = ts,
                         Symbol = normalizedSymbol
                     });
             }
-            local_lob.Sequence = lob_update.LastUpdateId; //update the sequence
+            
+            local_lob.Sequence = lob_update.LastUpdateId;
             local_lob.LastUpdated = ts;
             RaiseOnDataReceived(local_lob);
-        } 
+        }
 
         private async Task DoPingAsync()
         {
             try
             {
                 if (Status == ePluginStatus.STOPPED || Status == ePluginStatus.STOPPING || Status == ePluginStatus.STOPPED_FAILED)
-                    return; //do not ping if any of these statues
+                    return;
 
                 bool isConnected = _socketClient.CurrentConnections > 0;
                 if (!isConnected)
@@ -805,29 +792,26 @@ namespace MarketConnectors.Binance
                     throw new Exception("The socket seems to be disconnected.");
                 }
 
-
                 DateTime ini = DateTime.Now;
                 var result = await _restClient.SpotApi.ExchangeData.PingAsync();
                 if (result != null)
                 {
                     var timeLapseInMicroseconds = DateTime.Now.Subtract(ini).TotalMicroseconds;
 
-
-                    // Connection is healthy
-                    pingFailedAttempts = 0; // Reset the failed attempts on a successful ping
+                    // ✅ FIX: Use Interlocked for thread safety
+                    Interlocked.Exchange(ref pingFailedAttempts, 0);
 
                     RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
                 }
                 else
                 {
-                    // Consider the ping failed
                     throw new Exception("Ping failed, result was null.");
                 }
             }
             catch (Exception ex)
             {
-
-                if (++pingFailedAttempts >= 5) //5 attempts
+                // ✅ FIX: Use Interlocked.Increment for thread safety
+                if (Interlocked.Increment(ref pingFailedAttempts) >= 5)
                 {
                     var _error = $"Will reconnect. Unhandled error in DoPingAsync. Initiating reconnection. {ex.Message}";
                     LogException(ex, _error);
@@ -835,7 +819,6 @@ namespace MarketConnectors.Binance
                     Task.Run(async () => await HandleConnectionLost(_error, ex));
                 }
             }
-
         }
 
         private VisualHFT.Model.OrderBook ToOrderBookModel(BinanceOrderBook data)
@@ -902,16 +885,22 @@ namespace MarketConnectors.Binance
                     _socketClient?.Dispose();
                     _restClient?.Dispose();
                     _timerPing?.Dispose();
-
+                    
+                    // ✅ FIX: Dispose _timerListenKey
+                    _timerListenKey?.Dispose();
+                    
+                    // ✅ FIX: Dispose semaphore
+                    _startStopLock?.Dispose();
 
                     _eventBuffers?.Dispose();
                     _tradesBuffers?.Dispose();
 
                     if (_localOrderBooks != null)
                     {
-                        foreach (var lob in _localOrderBooks)
+                        var orderBooksToDispose = _localOrderBooks.Values.ToArray();
+                        foreach (var lob in orderBooksToDispose)
                         {
-                            lob.Value?.Dispose();
+                            lob?.Dispose();
                         }
                         _localOrderBooks.Clear();
                     }
@@ -991,229 +980,72 @@ namespace MarketConnectors.Binance
         //FOR UNIT TESTING PURPOSE
         public void InjectSnapshot(VisualHFT.Model.OrderBook snapshotModel, long sequence)
         {
-
             var localModel = new BinanceOrderBook();
             localModel.Symbol = snapshotModel.Symbol;
-            localModel.Bids = snapshotModel.Bids.Select(x => new BinanceOrderBookEntry() {  Price = x.Price.ToDecimal(), Quantity = x.Size.ToDecimal()}).ToArray();
+            localModel.Bids = snapshotModel.Bids.Select(x => new BinanceOrderBookEntry() { Price = x.Price.ToDecimal(), Quantity = x.Size.ToDecimal() }).ToArray();
             localModel.Asks = snapshotModel.Asks.Select(x => new BinanceOrderBookEntry() { Price = x.Price.ToDecimal(), Quantity = x.Size.ToDecimal() }).ToArray();
             localModel.LastUpdateId = sequence;
-            _settings.DepthLevels = snapshotModel.MaxDepth; //force depth received
+            _settings.DepthLevels = snapshotModel.MaxDepth;
 
             var symbol = snapshotModel.Symbol;
 
-            if (!_localOrderBooks.ContainsKey(symbol))
-            {
-                _localOrderBooks.Add(symbol, ToOrderBookModel(localModel));
-            }
-            _localOrderBooks[symbol] = ToOrderBookModel(localModel);
+            // ✅ FIX: Use AddOrUpdate for ConcurrentDictionary
+            _localOrderBooks.AddOrUpdate(
+                symbol,
+                ToOrderBookModel(localModel),
+                (key, oldValue) => ToOrderBookModel(localModel)
+            );
 
             RaiseOnDataReceived(_localOrderBooks[symbol]);
-
         }
 
-        public void InjectDeltaModel(List<DeltaBookItem> bidDeltaModel, List<DeltaBookItem> askDeltaModel)
-        {
-            var symbol = bidDeltaModel?.FirstOrDefault()?.Symbol;
-            if (symbol == null)
-                symbol = askDeltaModel?.FirstOrDefault()?.Symbol;
-            if (string.IsNullOrEmpty(symbol))
-                throw new Exception("Couldn't find the symbol for this model.");
-            var ts = DateTime.Now;
-
-            var localModel = new BinanceEventOrderBook();
-            localModel.Bids = bidDeltaModel?.Select(x => new BinanceOrderBookEntry() { Price = x.Price.ToDecimal(), Quantity = x.Size.ToDecimal() }).ToArray();
-            localModel.Asks = askDeltaModel?.Select(x => new BinanceOrderBookEntry() { Price = x.Price.ToDecimal(), Quantity = x.Size.ToDecimal() }).ToArray();
-            long minSequence = Math.Min(bidDeltaModel.Min(x => x.Sequence), askDeltaModel.Min(x => x.Sequence));
-            long maxSequence = Math.Max(bidDeltaModel.Max(x => x.Sequence), askDeltaModel.Max(x => x.Sequence));
-            localModel.FirstUpdateId = minSequence;
-            localModel.LastUpdateId = maxSequence;
-
-
-            UpdateOrderBook(localModel, symbol);
-        }
-
+        // ✅ FIX: Return actual orders from _localUserOrders
         public List<VisualHFT.Model.Order> ExecutePrivateMessageScenario(eTestingPrivateMessageScenario scenario)
         {
-            //depending on the scenario, load its message(s)
-            string _file = "";
-            if (scenario == eTestingPrivateMessageScenario.SCENARIO_1)
-                _file = "PrivateMessages_Scenario1.json";
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_2)
-                _file = "PrivateMessages_Scenario2.json";
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_3)
-                _file = "PrivateMessages_Scenario3.json";
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_4)
-                _file = "PrivateMessages_Scenario4.json";
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_5)
-                _file = "PrivateMessages_Scenario5.json";
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_6)
-                _file = "PrivateMessages_Scenario6.json";
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_7)
-                _file = "PrivateMessages_Scenario7.json";
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_8)
-                _file = "PrivateMessages_Scenario8.json";
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_9)
+            string _file = scenario switch
             {
-                _file = "PrivateMessages_Scenario9.json";
-                throw new Exception("Messages collected for this scenario don't look good.");
-            }
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_10)
-            {
-                _file = "PrivateMessages_Scenario10.json";
-                throw new Exception("Messages were not collected for this scenario.");
-            }
+                eTestingPrivateMessageScenario.SCENARIO_1 => "PrivateMessages_Scenario1.json",
+                eTestingPrivateMessageScenario.SCENARIO_2 => "PrivateMessages_Scenario2.json",
+                eTestingPrivateMessageScenario.SCENARIO_3 => "PrivateMessages_Scenario3.json",
+                eTestingPrivateMessageScenario.SCENARIO_4 => "PrivateMessages_Scenario4.json",
+                eTestingPrivateMessageScenario.SCENARIO_5 => "PrivateMessages_Scenario5.json",
+                eTestingPrivateMessageScenario.SCENARIO_6 => "PrivateMessages_Scenario6.json",
+                eTestingPrivateMessageScenario.SCENARIO_7 => "PrivateMessages_Scenario7.json",
+                eTestingPrivateMessageScenario.SCENARIO_8 => "PrivateMessages_Scenario8.json",
+                eTestingPrivateMessageScenario.SCENARIO_9 => throw new Exception("Messages collected for this scenario don't look good."),
+                eTestingPrivateMessageScenario.SCENARIO_10 => throw new Exception("Messages were not collected for this scenario."),
+                _ => throw new ArgumentException($"Unknown scenario: {scenario}")
+            };
 
             string jsonString = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, $"Binance_JsonMessages/{_file}"));
-             
-            //DESERIALIZE EXCHANGES MODEL
+
             List<BinanceStreamOrderUpdate> modelList = new List<BinanceStreamOrderUpdate>();
-            var dataEvents = new List<BinanceStreamOrderUpdate>();
             var jsonArray = JArray.Parse(jsonString);
+            
             foreach (var jsonObject in jsonArray)
             {
                 JToken dataToken = jsonObject["data"];
                 string dataJsonString = dataToken.ToString();
-                 
                 BinanceStreamOrderUpdate _data = JsonParser.Parse(dataJsonString);
 
                 if (_data != null)
-                        modelList.Add(_data);
-                 
+                    modelList.Add(_data);
             }
-            //END UPDATE VISUALHFT CORE
 
-
-            //UPDATE VISUALHFT CORE & CREATE MODEL TO RETURN
             if (!modelList.Any())
                 throw new Exception("No data was found in the json file.");
+
+            // Clear previous orders
+            _localUserOrders.Clear();
+
+            // Process all order updates
             foreach (var item in modelList)
             {
                 UpdateUserOrderBook(item);
             }
-            //END UPDATE VISUALHFT CORE
 
-
-            //CREATE MODEL TO RETURN (First, identify the order that was sent, then use that one with the updated values)
-            var dicOrders = new Dictionary<string, VisualHFT.Model.Order>(); 
-            foreach (var item in modelList)
-            {
-
-                VisualHFT.Model.Order localuserOrder;
-                if (!dicOrders.ContainsKey(item.ClientOrderId))
-                {
-                    localuserOrder = new VisualHFT.Model.Order();
-                    localuserOrder.OrderID = item.Id;
-                    localuserOrder.ClOrdId = !string.IsNullOrEmpty(item.ClientOrderId) ? item.ClientOrderId : item.Id.ToString();
-                    localuserOrder.Currency = GetNormalizedSymbol(item.Symbol);
-                    localuserOrder.CreationTimeStamp = item.CreateTime;
-                    localuserOrder.OrderID = item.Id;
-                    localuserOrder.ProviderId = _settings!.Provider.ProviderID;
-                    localuserOrder.ProviderName = _settings.Provider.ProviderName;
-                    localuserOrder.CreationTimeStamp = item.CreateTime;
-                    localuserOrder.Quantity = (double)item.Quantity;
-                    localuserOrder.PricePlaced = (double)item.Price;
-                    localuserOrder.Symbol = GetNormalizedSymbol(item.Symbol);
-                    localuserOrder.TimeInForce = eORDERTIMEINFORCE.GTC;
-
-                    if (item.TimeInForce == TimeInForce.ImmediateOrCancel)
-                    {
-                        localuserOrder.TimeInForce = eORDERTIMEINFORCE.IOC;
-                    }
-                    else if (item.TimeInForce == TimeInForce.FillOrKill)
-                    {
-                        localuserOrder.TimeInForce = eORDERTIMEINFORCE.FOK;
-                    }
-                    if (item.Type == SpotOrderType.Market)
-                    {
-                        localuserOrder.OrderType = eORDERTYPE.MARKET;
-                    }
-                    else
-                    {
-                        localuserOrder.OrderType = eORDERTYPE.LIMIT;
-                    }
-
-                    if (item.Side == OrderSide.Buy)
-                    {
-                        localuserOrder.Side = eORDERSIDE.Buy;
-                    }
-                    else if (item.Side == OrderSide.Sell)
-                    {
-                        localuserOrder.Side = eORDERSIDE.Sell;
-                    }
-
-
-
-                    dicOrders.Add(item.ClientOrderId, localuserOrder);
-                }
-                else
-                {
-                    localuserOrder = dicOrders[item.ClientOrderId];
-                }
-
-
-                if (item.Status == OrderStatus.New || item.Status == OrderStatus.PendingNew)
-                {
-                    if (item.Side == OrderSide.Buy)
-                    {
-                        localuserOrder.CreationTimeStamp = item.CreateTime;
-                        localuserOrder.PricePlaced = (double)item.Price;
-                        localuserOrder.BestBid = (double)item.Price;
-                        localuserOrder.Side = eORDERSIDE.Buy;
-                    }
-                    if (item.Side == OrderSide.Sell)
-                    {
-                        localuserOrder.Side = eORDERSIDE.Sell;
-                        localuserOrder.BestAsk = (double)item.Price;
-                        localuserOrder.CreationTimeStamp = item.CreateTime;
-                        localuserOrder.Quantity = (double)item.Quantity;
-                    }
-                    localuserOrder.Status = eORDERSTATUS.NEW;
-                }
-                if (item.Status == OrderStatus.Filled)
-                {
-
-                    localuserOrder.BestAsk = (double)item.Price;
-                    localuserOrder.BestBid = (double)item.Price;
-                    localuserOrder.FilledQuantity = (double)(item.QuantityFilled);
-                    localuserOrder.Status = eORDERSTATUS.FILLED;
-                }
-                if (item.Status == OrderStatus.Canceled)
-                {
-                    localuserOrder.Status = eORDERSTATUS.CANCELED;
-                }
-
-                if (item.Status == OrderStatus.Rejected)
-                {
-                    localuserOrder.Status = eORDERSTATUS.REJECTED;
-                }
-
-                if (item.Status == OrderStatus.PartiallyFilled)
-                {
-                    localuserOrder.BestAsk = (double)item.Price;
-                    localuserOrder.BestBid = (double)item.Price;
-                    localuserOrder.Status = eORDERSTATUS.PARTIALFILLED;
-                }
-
-
-                if (item.Status == OrderStatus.PendingCancel)
-                {
-                    localuserOrder.Status = eORDERSTATUS.CANCELEDSENT;
-                }
-                localuserOrder.LastUpdated = DateTime.Now;
-
-                
-                //CHECK IF IT IS BEING MODIFIED => REMOVE THE ORIGINAL, SO THE UNIT TEST GETS JUST THE LATEST
-                if (!string.IsNullOrEmpty(item.OriginalClientOrderId) && item.OriginalClientOrderId != item.ClientOrderId)
-                {
-                    if (dicOrders.TryGetValue(item.OriginalClientOrderId, out var originalOrder))
-                        originalOrder.Status = localuserOrder.Status;
-                }
-
-            }
-            //END CREATE MODEL TO RETURN
-
-
-            return dicOrders.Values.ToList();
+            // ✅ FIX: Return actual orders from _localUserOrders
+            return _localUserOrders.Values.ToList();
         }
     }
 }

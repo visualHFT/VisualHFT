@@ -17,30 +17,32 @@ using VisualHFT.Commons.Model;
 using Coinbase.Net;
 using CryptoExchange.Net.Authentication;
 using System.IO;
+using System.Collections.Concurrent;
 
 namespace MarketConnectors.Coinbase
 {
     public class CoinbasePlugin : BasePluginDataRetriever
     {
-        private bool _disposed = false; // to track whether the object has been disposed
+        private bool _disposed = false;
+        private readonly SemaphoreSlim _startStopLock = new SemaphoreSlim(1, 1);
+        private bool isReconnecting = false;
 
         private PlugInSettings _settings;
         private CoinbaseSocketClient _socketClient;
         private CoinbaseRestClient _restClient;
 
-        private Dictionary<string, VisualHFT.Model.OrderBook> _localOrderBooks =
-            new Dictionary<string, VisualHFT.Model.OrderBook>();
+        // ✅ FIX: Use ConcurrentDictionary for thread safety
+        private readonly ConcurrentDictionary<string, VisualHFT.Model.OrderBook> _localOrderBooks =
+            new ConcurrentDictionary<string, VisualHFT.Model.OrderBook>();
 
-        private Dictionary<string, HelperCustomQueue<Tuple<DateTime, string, CoinbaseOrderBookUpdate>>> _eventBuffers =
-            new Dictionary<string, HelperCustomQueue<Tuple<DateTime, string, CoinbaseOrderBookUpdate>>>();
+        private readonly ConcurrentDictionary<string, HelperCustomQueue<Tuple<DateTime, string, CoinbaseOrderBookUpdate>>> _eventBuffers =
+            new ConcurrentDictionary<string, HelperCustomQueue<Tuple<DateTime, string, CoinbaseOrderBookUpdate>>>();
 
-        private Dictionary<string, HelperCustomQueue<Tuple<string, CoinbaseTrade>>> _tradesBuffers =
-            new Dictionary<string, HelperCustomQueue<Tuple<string, CoinbaseTrade>>>();
+        private readonly ConcurrentDictionary<string, HelperCustomQueue<Tuple<string, CoinbaseTrade>>> _tradesBuffers =
+            new ConcurrentDictionary<string, HelperCustomQueue<Tuple<string, CoinbaseTrade>>>();
 
-
-        private Dictionary<string, VisualHFT.Model.Order> _localUserOrders =
-            new Dictionary<string, VisualHFT.Model.Order>();
-
+        private readonly ConcurrentDictionary<string, VisualHFT.Model.Order> _localUserOrders =
+            new ConcurrentDictionary<string, VisualHFT.Model.Order>();
 
         private int pingFailedAttempts = 0;
         private System.Timers.Timer _timerPing;
@@ -51,7 +53,7 @@ namespace MarketConnectors.Coinbase
             log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
         private readonly CustomObjectPool<VisualHFT.Model.Trade> tradePool =
-            new CustomObjectPool<VisualHFT.Model.Trade>(); //pool of Trade objects
+            new CustomObjectPool<VisualHFT.Model.Trade>();
 
 
         public override string Name { get; set; } = "Coinbase Plugin";
@@ -128,47 +130,62 @@ namespace MarketConnectors.Coinbase
 
         private async Task InternalStartAsync()
         {
-            await ClearAsync();
-
-            // Initialize event buffer for each symbol
-            foreach (var symbol in GetAllNormalizedSymbols())
+            // ✅ FIX: Add synchronization
+            await _startStopLock.WaitAsync();
+            try
             {
-                _eventBuffers.Add(symbol,
-                    new HelperCustomQueue<Tuple<DateTime, string, CoinbaseOrderBookUpdate>>(
-                        $"<Tuple<DateTime, string, CoinbaseStreamOrderBookChanged>>_{this.Name.Replace(" Plugin", "")}",
-                        eventBuffers_onReadAction, eventBuffers_onErrorAction));
-                _tradesBuffers.Add(symbol,
-                    new HelperCustomQueue<Tuple<string, CoinbaseTrade>>(
-                        $"<Tuple<DateTime, string, CoinbaseTrade>>_{this.Name.Replace(" Plugin", "")}",
-                        tradesBuffers_onReadAction, tradesBuffers_onErrorAction));
+                await ClearAsync();
 
-                _eventBuffers[symbol]
-                    .PauseConsumer(); //this will allow collecting deltas (without delivering it), until we have the snapshot
+                foreach (var symbol in GetAllNormalizedSymbols())
+                {
+                    _eventBuffers.TryAdd(symbol,
+                        new HelperCustomQueue<Tuple<DateTime, string, CoinbaseOrderBookUpdate>>(
+                            $"<Tuple<DateTime, string, CoinbaseStreamOrderBookChanged>>_{this.Name.Replace(" Plugin", "")}",
+                            eventBuffers_onReadAction, eventBuffers_onErrorAction));
+                    _tradesBuffers.TryAdd(symbol,
+                        new HelperCustomQueue<Tuple<string, CoinbaseTrade>>(
+                            $"<Tuple<DateTime, string, CoinbaseTrade>>_{this.Name.Replace(" Plugin", "")}",
+                            tradesBuffers_onReadAction, tradesBuffers_onErrorAction));
+
+                    _eventBuffers[symbol].PauseConsumer();
+                }
+
+                await InitializeDeltasAsync();
+                await InitializeSnapshotsAsync();
+                await InitializeOpenOrders();
+                await InitializeTradesAsync();
+                await InitializePingTimerAsync();
+                await InitializeUserPrivateOrders();
             }
-
-            await InitializeDeltasAsync(); //must start collecting deltas before snapshot
-            await InitializeSnapshotsAsync();
-            await InitializeOpenOrders();
-            await InitializeTradesAsync();
-            await InitializePingTimerAsync();
-            await InitializeUserPrivateOrders();
+            finally
+            {
+                _startStopLock.Release();
+            }
         }
 
         public override async Task StopAsync()
         {
-            Status = ePluginStatus.STOPPING;
-            log.Info($"{this.Name} is stopping.");
+            // ✅ FIX: Add synchronization
+            await _startStopLock.WaitAsync();
+            try
+            {
+                Status = ePluginStatus.STOPPING;
+                log.Info($"{this.Name} is stopping.");
 
-            await ClearAsync();
-            RaiseOnDataReceived(new List<VisualHFT.Model.OrderBook>());
-            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED));
+                await ClearAsync();
+                RaiseOnDataReceived(new List<VisualHFT.Model.OrderBook>());
+                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED));
 
-            await base.StopAsync();
+                await base.StopAsync();
+            }
+            finally
+            {
+                _startStopLock.Release();
+            }
         }
 
         public async Task ClearAsync()
         {
-
             UnattachEventHandlers(deltaSubscription?.Data);
             UnattachEventHandlers(tradesSubscription?.Data);
             if (_socketClient != null)
@@ -180,23 +197,50 @@ namespace MarketConnectors.Coinbase
             _timerPing?.Stop();
             _timerPing?.Dispose();
 
+            // ✅ FIX: Dispose queues properly
             foreach (var q in _eventBuffers)
-                q.Value.Stop();
+            {
+                try
+                {
+                    q.Value?.Stop();
+                    q.Value?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    log.Debug($"Error disposing event buffer: {ex.Message}");
+                }
+            }
             _eventBuffers.Clear();
 
             foreach (var q in _tradesBuffers)
-                q.Value.Stop();
+            {
+                try
+                {
+                    q.Value?.Stop();
+                    q.Value?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    log.Debug($"Error disposing trades buffer: {ex.Message}");
+                }
+            }
             _tradesBuffers.Clear();
 
-
-            //CLEAR LOB
+            // ✅ FIX: Safe OrderBook disposal with snapshot
             if (_localOrderBooks != null)
             {
-                foreach (var lob in _localOrderBooks)
+                var orderBooksToDispose = _localOrderBooks.Values.ToArray();
+                foreach (var lob in orderBooksToDispose)
                 {
-                    lob.Value?.Dispose();
+                    try
+                    {
+                        lob?.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        log.Debug($"Error disposing order book: {ex.Message}");
+                    }
                 }
-
                 _localOrderBooks.Clear();
             }
         }
@@ -332,10 +376,8 @@ namespace MarketConnectors.Coinbase
                 foreach (var symbol in GetAllNonNormalizedSymbols())
                 {
                     var normalizedSymbol = GetNormalizedSymbol(symbol);
-                    if (!_localOrderBooks.ContainsKey(normalizedSymbol))
-                    {
-                        _localOrderBooks.Add(normalizedSymbol, null);
-                    }
+                    // ✅ FIX: Use TryAdd instead of ContainsKey + Add
+                    _localOrderBooks.TryAdd(normalizedSymbol, null);
 
                     log.Info($"{this.Name}: Getting snapshot {normalizedSymbol} level 2");
 
@@ -474,29 +516,37 @@ namespace MarketConnectors.Coinbase
             string _error = $"Websocket error: {obj.Message}";
             LogException(obj, _error, true);
 
-            Task.Run(StopAsync);
-
-            Status = ePluginStatus.STOPPED_FAILED;
-            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED_FAILED));
+            if (!isReconnecting)
+            {
+                isReconnecting = true;
+                Task.Run(async () =>
+                {
+                    await HandleConnectionLost(_error, obj);
+                    isReconnecting = false;
+                });
+            }
         }
 
         #endregion
 
+        // ✅ FIX: Thread-safe UpdateOrderBook
         private void UpdateOrderBook(CoinbaseOrderBookUpdate lob_update, string symbol, DateTime ts)
         {
-            if (!_localOrderBooks.ContainsKey(symbol))
-                return;
             if (lob_update == null)
                 return;
 
-            var local_lob = _localOrderBooks[symbol];
+            // ✅ Use TryGetValue for thread safety
+            if (!_localOrderBooks.TryGetValue(symbol, out var local_lob))
+                return;
+
             if (local_lob == null)
             {
-                local_lob = new VisualHFT.Model.OrderBook();
+                log.Warn($"OrderBook for {symbol} is null, skipping update");
+                return;
             }
 
-            //if (lob_update.SequenceStart > local_lob.Sequence + 1)
-            //    throw new Exception("Detected sequence gap.");
+            // ✅ Cache DateTime.Now once
+            var now = DateTime.Now;
 
             foreach (var item in lob_update.Bids)
             {
@@ -508,7 +558,7 @@ namespace MarketConnectors.Coinbase
                         Price = (double)item.Price,
                         Size = (double)item.Quantity,
                         IsBid = true,
-                        LocalTimeStamp = DateTime.Now,
+                        LocalTimeStamp = now,
                         ServerTimeStamp = ts,
                         Symbol = symbol
                     });
@@ -520,7 +570,7 @@ namespace MarketConnectors.Coinbase
                         MDUpdateAction = eMDUpdateAction.Delete,
                         Price = (double)item.Price,
                         IsBid = true,
-                        LocalTimeStamp = DateTime.Now,
+                        LocalTimeStamp = now,
                         ServerTimeStamp = ts,
                         Symbol = symbol
                     });
@@ -537,7 +587,7 @@ namespace MarketConnectors.Coinbase
                         Price = (double)item.Price,
                         Size = (double)item.Quantity,
                         IsBid = false,
-                        LocalTimeStamp = DateTime.Now,
+                        LocalTimeStamp = now,
                         ServerTimeStamp = ts,
                         Symbol = symbol
                     });
@@ -549,7 +599,7 @@ namespace MarketConnectors.Coinbase
                         MDUpdateAction = eMDUpdateAction.Delete,
                         Price = (double)item.Price,
                         IsBid = false,
-                        LocalTimeStamp = DateTime.Now,
+                        LocalTimeStamp = now,
                         ServerTimeStamp = ts,
                         Symbol = symbol
                     });
@@ -663,58 +713,41 @@ namespace MarketConnectors.Coinbase
             List<VisualHFT.Model.Order> lstlocaluserOrder = new List<VisualHFT.Model.Order>();
             foreach (var item in order.Orders)
             {
-                VisualHFT.Model.Order localuserOrder;
-                if (!this._localUserOrders.ContainsKey(item.OrderId))
+                var localuserOrder = _localUserOrders.GetOrAdd(item.OrderId, _ =>
                 {
-                    localuserOrder = new VisualHFT.Model.Order();
-                    localuserOrder.OrderID = Math.Abs(item.OrderId.ToString().GetHashCode());
-                    localuserOrder.ClOrdId = item.OrderId;
-                    localuserOrder.CreationTimeStamp = item.CreateTime;
+                    var newOrder = new VisualHFT.Model.Order
+                    {
+                        OrderID = Math.Abs(item.OrderId.ToString().GetHashCode()),
+                        ClOrdId = item.OrderId,
+                        CreationTimeStamp = item.CreateTime,
+                        ProviderId = _settings!.Provider.ProviderID,
+                        ProviderName = _settings.Provider.ProviderName,
+                        Symbol = GetNormalizedSymbol(item.Symbol),
+                        Side = item.OrderSide == OrderSide.Buy ? eORDERSIDE.Buy : eORDERSIDE.Sell,
+                        OrderType = (item.OrderType == OrderType.Market || item.OrderType == OrderType.Stop)
+                            ? eORDERTYPE.MARKET
+                            : eORDERTYPE.LIMIT,
+                        TimeInForce = eORDERTIMEINFORCE.GTC
+                    };
 
-                    localuserOrder.ProviderId = _settings!.Provider.ProviderID;
-                    localuserOrder.ProviderName = _settings.Provider.ProviderName;
                     if (item.QuantityFilled + item.QuantityRemaining != 0)
-                        localuserOrder.Quantity = (item.QuantityFilled + item.QuantityRemaining).ToDouble();
+                        newOrder.Quantity = (item.QuantityFilled + item.QuantityRemaining).ToDouble();
 
                     if (item.OrderType != OrderType.Market)
-                    {
-                        localuserOrder.PricePlaced = item.Price.ToDouble();
-                    }
+                        newOrder.PricePlaced = item.Price.ToDouble();
 
-                    localuserOrder.Side = item.OrderSide == OrderSide.Buy ? eORDERSIDE.Buy : eORDERSIDE.Sell;
-                    localuserOrder.Symbol = GetNormalizedSymbol(item.Symbol);
+                    return newOrder;
+                });
 
-                    if (item.OrderType == OrderType.Market || item.OrderType == OrderType.Stop)
-                        localuserOrder.OrderType = eORDERTYPE.MARKET;
-                    else
-                        localuserOrder.OrderType = eORDERTYPE.LIMIT;
-                    localuserOrder.TimeInForce = eORDERTIMEINFORCE.GTC; //default
-
-
-                    this._localUserOrders.Add(item.OrderId, localuserOrder);
-                }
-                else
-                {
-                    localuserOrder = this._localUserOrders[item.OrderId];
-                }
+                // Update status
                 if (item.Status == OrderStatus.Queued || item.Status == OrderStatus.Open || item.Status == OrderStatus.Pending)
                     localuserOrder.Status = eORDERSTATUS.NEW;
-
-                if (item.Status == OrderStatus.Canceled)
+                else if (item.Status == OrderStatus.Canceled || item.Status == OrderStatus.Expired)
                     localuserOrder.Status = eORDERSTATUS.CANCELED;
-
-                if (item.Status == OrderStatus.Filled)
+                else if (item.Status == OrderStatus.Filled && item.QuantityRemaining <= 0)
                     localuserOrder.Status = eORDERSTATUS.FILLED;
-
-                if (item.Status == OrderStatus.Expired)
-                    localuserOrder.Status = eORDERSTATUS.CANCELED;
-
-                if (item.QuantityRemaining > 0)
+                else if (item.QuantityRemaining > 0)
                     localuserOrder.Status = eORDERSTATUS.PARTIALFILLED;
-
-
-                if (item.QuantityRemaining <= 0)
-                    localuserOrder.Status = eORDERSTATUS.FILLED;
 
                 lstlocaluserOrder.Add(localuserOrder);
             }
@@ -745,6 +778,7 @@ namespace MarketConnectors.Coinbase
                     _socketClient?.Dispose();
                     _restClient?.Dispose();
                     _timerPing?.Dispose();
+                    _startStopLock?.Dispose();
 
                     foreach (var q in _eventBuffers)
                         q.Value?.Dispose();
@@ -754,12 +788,12 @@ namespace MarketConnectors.Coinbase
                         q.Value?.Dispose();
                     _tradesBuffers.Clear();
 
-
                     if (_localOrderBooks != null)
                     {
-                        foreach (var lob in _localOrderBooks)
+                        var orderBooksToDispose = _localOrderBooks.Values.ToArray();
+                        foreach (var lob in orderBooksToDispose)
                         {
-                            lob.Value?.Dispose();
+                            lob?.Dispose();
                         }
                         _localOrderBooks.Clear();
                     }
@@ -857,13 +891,12 @@ namespace MarketConnectors.Coinbase
 
             var symbol = snapshotModel.Symbol;
 
-            if (!_localOrderBooks.ContainsKey(symbol))
-            {
-                _localOrderBooks.Add(symbol, ToOrderBookModel(localModel, symbol));
-            }
-            else
-                _localOrderBooks[symbol] = ToOrderBookModel(localModel, symbol);
-
+            // ✅ FIX: Use AddOrUpdate for ConcurrentDictionary
+            _localOrderBooks.AddOrUpdate(
+                symbol,
+                ToOrderBookModel(localModel, symbol),
+                (key, oldValue) => ToOrderBookModel(localModel, symbol)
+            );
 
             RaiseOnDataReceived(_localOrderBooks[symbol]);
         }
@@ -894,56 +927,44 @@ namespace MarketConnectors.Coinbase
 
         public List<VisualHFT.Model.Order> ExecutePrivateMessageScenario(eTestingPrivateMessageScenario scenario)
         {
-
-            //depending on the scenario, load its message(s)
-            string _file = "";
-            if (scenario == eTestingPrivateMessageScenario.SCENARIO_1)
-                _file = "PrivateMessages_Scenario1.json";
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_2)
-                _file = "PrivateMessages_Scenario2.json";
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_3)
-                _file = "PrivateMessages_Scenario3.json";
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_4)
-                _file = "PrivateMessages_Scenario4.json";
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_5)
-                _file = "PrivateMessages_Scenario5.json";
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_6)
-                _file = "PrivateMessages_Scenario6.json";
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_7)
-                _file = "PrivateMessages_Scenario7.json";
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_8)
-                _file = "PrivateMessages_Scenario8.json";
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_9)
+            string _file = scenario switch
             {
-                _file = "PrivateMessages_Scenario9.json";
-                throw new Exception("Messages collected for this scenario don't look good.");
-            }
-            else if (scenario == eTestingPrivateMessageScenario.SCENARIO_10)
-            {
-                _file = "PrivateMessages_Scenario10.json";
-                throw new Exception("Messages were not collected for this scenario.");
-            }
+                eTestingPrivateMessageScenario.SCENARIO_1 => "PrivateMessages_Scenario1.json",
+                eTestingPrivateMessageScenario.SCENARIO_2 => "PrivateMessages_Scenario2.json",
+                eTestingPrivateMessageScenario.SCENARIO_3 => "PrivateMessages_Scenario3.json",
+                eTestingPrivateMessageScenario.SCENARIO_4 => "PrivateMessages_Scenario4.json",
+                eTestingPrivateMessageScenario.SCENARIO_5 => "PrivateMessages_Scenario5.json",
+                eTestingPrivateMessageScenario.SCENARIO_6 => "PrivateMessages_Scenario6.json",
+                eTestingPrivateMessageScenario.SCENARIO_7 => "PrivateMessages_Scenario7.json",
+                eTestingPrivateMessageScenario.SCENARIO_8 => "PrivateMessages_Scenario8.json",
+                eTestingPrivateMessageScenario.SCENARIO_9 => throw new Exception("Messages collected for this scenario don't look good."),
+                eTestingPrivateMessageScenario.SCENARIO_10 => throw new Exception("Messages were not collected for this scenario."),
+                _ => throw new ArgumentException($"Unknown scenario: {scenario}")
+            };
 
             string jsonString = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, $"coinbase_jsonMessages/{_file}"));
 
-
-
-
-            //DESERIALIZE EXCHANGES MODEL
-            List<CoinbaseOrderBookUpdate> modelList = new List<CoinbaseOrderBookUpdate>();
             var jsonArray = JArray.Parse(jsonString);
 
+            // Clear previous orders
+            _localUserOrders.Clear();
 
-            //END DESERIALIZE EXCHANGES MODEL
+            // Process all order updates
+            foreach (var jsonObject in jsonArray)
+            {
+                var orderUpdate = jsonObject.ToObject<CoinbaseUserUpdate>();
+                if (orderUpdate != null)
+                {
+                    var orders = GetOrCreateUserOrder(orderUpdate);
+                    foreach (var order in orders)
+                    {
+                        order.LastUpdated = DateTime.Now;
+                        RaiseOnDataReceived(order);
+                    }
+                }
+            }
 
-
-
-            //UPDATE VISUALHFT CORE & CREATE MODEL TO RETURN
-
-
-            //return dicOrders.Values.ToList();
-            return null;
-
+            return _localUserOrders.Values.ToList();
         }
     }
 }

@@ -32,6 +32,10 @@ namespace MarketConnectors.KuCoin
     public class KuCoinPlugin : BasePluginDataRetriever, IDataRetrieverTestable
     {
         private bool _disposed = false; // to track whether the object has been disposed
+        
+        // ✅ FIX: Add synchronization and reconnection flag
+        private readonly SemaphoreSlim _startStopLock = new SemaphoreSlim(1, 1);
+        private bool isReconnecting = false;
 
         private PlugInSettings _settings;
         private IKucoinSocketClient _socketClient;
@@ -96,61 +100,69 @@ namespace MarketConnectors.KuCoin
 
         public override async Task StartAsync()
         {
-            if (Status == ePluginStatus.STARTED ||
-                    Status == ePluginStatus.STARTING)
-            {
-                log.Warn("Already started or starting, ignoring duplicate Start request");
-                return;
-            }
-
-            await base.StartAsync(); //call the base first
-            
-            // ✅ Dispose old clients first
-            _socketClient?.Dispose();
-            _restClient?.Dispose();
-
-            _socketClient = new KucoinSocketClient(options =>
-            {
-                if (!string.IsNullOrEmpty(_settings.ApiKey) && !string.IsNullOrEmpty(_settings.ApiSecret) &&
-                    !string.IsNullOrEmpty(_settings.APIPassPhrase))
-                {
-                    options.ApiCredentials = new ApiCredentials(_settings.ApiKey,
-                        _settings.ApiSecret, _settings.APIPassPhrase);
-                }
-
-                options.Environment = KucoinEnvironment.Live;
-            });
-
-
-            _restClient = new KucoinRestClient(options =>
-            {
-                if (!string.IsNullOrEmpty(_settings.ApiKey) && !string.IsNullOrEmpty(_settings.ApiSecret) &&
-                    !string.IsNullOrEmpty(_settings.APIPassPhrase))
-                {
-                    options.ApiCredentials = new ApiCredentials(_settings.ApiKey,
-                        _settings.ApiSecret, _settings.APIPassPhrase);
-                }
-
-                options.Environment = KucoinEnvironment.Live;
-            });
-
-
+            // ✅ FIX: Use semaphore instead of status check
+            await _startStopLock.WaitAsync();
             try
             {
-                await InternalStartAsync();
-                if (Status == ePluginStatus.STOPPED_FAILED) //check again here for failure
+                if (Status == ePluginStatus.STARTED || Status == ePluginStatus.STARTING)
+                {
+                    log.Warn("Already started or starting, ignoring duplicate Start request");
                     return;
-                log.Info($"Plugin has successfully started.");
-                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
-                Status = ePluginStatus.STARTED;
+                }
+
+                await base.StartAsync(); //call the base first
+                
+                // ✅ Dispose old clients first
+                _socketClient?.Dispose();
+                _restClient?.Dispose();
+
+                _socketClient = new KucoinSocketClient(options =>
+                {
+                    if (!string.IsNullOrEmpty(_settings.ApiKey) && !string.IsNullOrEmpty(_settings.ApiSecret) &&
+                        !string.IsNullOrEmpty(_settings.APIPassPhrase))
+                    {
+                        options.ApiCredentials = new ApiCredentials(_settings.ApiKey,
+                            _settings.ApiSecret, _settings.APIPassPhrase);
+                    }
+
+                    options.Environment = KucoinEnvironment.Live;
+                });
 
 
+                _restClient = new KucoinRestClient(options =>
+                {
+                    if (!string.IsNullOrEmpty(_settings.ApiKey) && !string.IsNullOrEmpty(_settings.ApiSecret) &&
+                        !string.IsNullOrEmpty(_settings.APIPassPhrase))
+                    {
+                        options.ApiCredentials = new ApiCredentials(_settings.ApiKey,
+                            _settings.ApiSecret, _settings.APIPassPhrase);
+                    }
+
+                    options.Environment = KucoinEnvironment.Live;
+                });
+
+
+                try
+                {
+                    await InternalStartAsync();
+                    if (Status == ePluginStatus.STOPPED_FAILED) //check again here for failure
+                        return;
+                    log.Info($"Plugin has successfully started.");
+                    RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
+                    Status = ePluginStatus.STARTED;
+
+
+                }
+                catch (Exception ex)
+                {
+                    var _error = ex.Message;
+                    LogException(ex, _error);
+                    await HandleConnectionLost(_error, ex);
+                }
             }
-            catch (Exception ex)
+            finally
             {
-                var _error = ex.Message;
-                LogException(ex, _error);
-                await HandleConnectionLost(_error, ex);
+                _startStopLock.Release();
             }
         }
 
@@ -185,14 +197,23 @@ namespace MarketConnectors.KuCoin
 
         public override async Task StopAsync()
         {
-            Status = ePluginStatus.STOPPING;
-            log.Info($"{this.Name} is stopping.");
+            // ✅ FIX: Add synchronization
+            await _startStopLock.WaitAsync();
+            try
+            {
+                Status = ePluginStatus.STOPPING;
+                log.Info($"{this.Name} is stopping.");
 
-            await ClearAsync();
-            RaiseOnDataReceived(new List<VisualHFT.Model.OrderBook>());
-            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED));
+                await ClearAsync();
+                RaiseOnDataReceived(new List<VisualHFT.Model.OrderBook>());
+                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED));
 
-            await base.StopAsync();
+                await base.StopAsync();
+            }
+            finally
+            {
+                _startStopLock.Release();
+            }
         }
 
         public async Task ClearAsync()
@@ -679,10 +700,16 @@ namespace MarketConnectors.KuCoin
             string _error = $"Websocket error: {obj.Message}";
             LogException(obj, _error, true);
 
-            Task.Run(StopAsync);
-
-            Status = ePluginStatus.STOPPED_FAILED;
-            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED_FAILED));
+            // ✅ FIX: Use isReconnecting flag to prevent duplicate reconnection attempts
+            if (!isReconnecting)
+            {
+                isReconnecting = true;
+                Task.Run(async () =>
+                {
+                    await HandleConnectionLost(_error, obj);
+                    isReconnecting = false;
+                });
+            }
         }
 
         #endregion
@@ -1058,6 +1085,9 @@ namespace MarketConnectors.KuCoin
                     _timerPing?.Dispose();
                     _socketClient?.Dispose();
                     _restClient?.Dispose();
+                    
+                    // ✅ FIX: Dispose semaphore
+                    _startStopLock?.Dispose();
 
                     foreach (var q in _eventBuffers.Values)
                     {

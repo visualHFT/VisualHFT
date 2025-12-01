@@ -32,6 +32,10 @@ namespace MarketConnectors.Kraken
     public class KrakenPlugin : BasePluginDataRetriever, IDataRetrieverTestable
     {
         private bool _disposed = false; // to track whether the object has been disposed
+        
+        // ✅ FIX: Add synchronization and reconnection flag
+        private readonly SemaphoreSlim _startStopLock = new SemaphoreSlim(1, 1);
+        private bool isReconnecting = false;
 
         private PlugInSettings _settings;
         private KrakenSocketClient _socketClient;
@@ -104,53 +108,73 @@ namespace MarketConnectors.Kraken
                 await HandleConnectionLost(_error, ex);
             }
         }
+        
         private async Task InternalStartAsync()
         {
-            await ClearAsync();
-
-            // Initialize event buffer for each symbol
-            foreach (var symbol in GetAllNormalizedSymbols())
+            // ✅ FIX: Add synchronization
+            await _startStopLock.WaitAsync();
+            try
             {
-                _eventBuffers.Add(symbol, new HelperCustomQueue<Tuple<DateTime, string, KrakenBookUpdate>>($"<Tuple<DateTime, string, KrakenOrderBookEntry>>_{this.Name.Replace(" Plugin", "")}", eventBuffers_onReadAction, eventBuffers_onErrorAction));
-                _tradesBuffers.Add(symbol, new HelperCustomQueue<Tuple<string, KrakenTradeUpdate>>($"<Tuple<DateTime, string, KrakenOrderBookEntry>>_{this.Name.Replace(" Plugin", "")}", tradesBuffers_onReadAction, tradesBuffers_onErrorAction));
+                await ClearAsync();
+
+                // Initialize event buffer for each symbol
+                foreach (var symbol in GetAllNormalizedSymbols())
+                {
+                    _eventBuffers.Add(symbol, new HelperCustomQueue<Tuple<DateTime, string, KrakenBookUpdate>>($"<Tuple<DateTime, string, KrakenOrderBookEntry>>_{this.Name.Replace(" Plugin", "")}", eventBuffers_onReadAction, eventBuffers_onErrorAction));
+                    _tradesBuffers.Add(symbol, new HelperCustomQueue<Tuple<string, KrakenTradeUpdate>>($"<Tuple<DateTime, string, KrakenOrderBookEntry>>_{this.Name.Replace(" Plugin", "")}", tradesBuffers_onReadAction, tradesBuffers_onErrorAction));
+                }
+
+                //await InitializeSnapshotsAsync(); // Snapshots are now handled in the delta subscription callback
+                await InitializeTradesAsync();
+                await InitializeDeltasAsync();
+                await InitializePingTimerAsync();
+                await InitializeUserPrivateOrders();
+
+                // ✅ FIX: Set status to STARTED so tests can detect status transitions
+                log.Info($"Plugin has successfully started.");
+                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
+                Status = ePluginStatus.STARTED;
             }
-
-            //await InitializeSnapshotsAsync(); // Snapshots are now handled in the delta subscription callback
-            await InitializeTradesAsync();
-            await InitializeDeltasAsync();
-            await InitializePingTimerAsync();
-            await InitializeUserPrivateOrders();
-
-            // ✅ FIX: Set status to STARTED so tests can detect status transitions
-            log.Info($"Plugin has successfully started.");
-            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
-            Status = ePluginStatus.STARTED;
+            finally
+            {
+                _startStopLock.Release();
+            }
         }
+        
         public override async Task StopAsync()
         {
-            // ✅ FIX: Set status FIRST to prevent reconnection race condition
-            Status = ePluginStatus.STOPPING;
-            log.Info($"{this.Name} is stopping.");
-
-            // ✅ FIX: Force cancel any pending reconnections by closing subscriptions first
-            foreach (var sub in deltaSubscriptions.Values)
+            // ✅ FIX: Add synchronization
+            await _startStopLock.WaitAsync();
+            try
             {
-                UnattachEventHandlers(sub?.Data);
-                if (sub != null && sub.Data != null)
-                    await sub.Data.CloseAsync();
+                // ✅ FIX: Set status FIRST to prevent reconnection race condition
+                Status = ePluginStatus.STOPPING;
+                log.Info($"{this.Name} is stopping.");
+
+                // ✅ FIX: Force cancel any pending reconnections by closing subscriptions first
+                foreach (var sub in deltaSubscriptions.Values)
+                {
+                    UnattachEventHandlers(sub?.Data);
+                    if (sub != null && sub.Data != null)
+                        await sub.Data.CloseAsync();
+                }
+                foreach (var sub in tradesSubscriptions.Values)
+                {
+                    UnattachEventHandlers(sub?.Data);
+                    if (sub != null && sub.Data != null)
+                        await sub.Data.CloseAsync();
+                }
+
+                await ClearAsync();
+                RaiseOnDataReceived(new List<VisualHFT.Model.OrderBook>());
+                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED));
+
+                await base.StopAsync();
             }
-            foreach (var sub in tradesSubscriptions.Values)
+            finally
             {
-                UnattachEventHandlers(sub?.Data);
-                if (sub != null && sub.Data != null)
-                    await sub.Data.CloseAsync();
+                _startStopLock.Release();
             }
-
-            await ClearAsync();
-            RaiseOnDataReceived(new List<VisualHFT.Model.OrderBook>());
-            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED));
-
-            await base.StopAsync();
         }
 
         private async Task ClearAsync()
@@ -560,10 +584,16 @@ namespace MarketConnectors.Kraken
             string _error = $"Websocket error: {obj.Message}";
             LogException(obj, _error, true);
 
-            Task.Run(StopAsync);
-
-            Status = ePluginStatus.STOPPED_FAILED;
-            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED_FAILED));
+            // ✅ FIX: Use isReconnecting flag to prevent duplicate reconnection attempts
+            if (!isReconnecting)
+            {
+                isReconnecting = true;
+                Task.Run(async () =>
+                {
+                    await HandleConnectionLost(_error, obj);
+                    isReconnecting = false;
+                });
+            }
         }
         #endregion
 
@@ -843,6 +873,9 @@ namespace MarketConnectors.Kraken
                     _socketClient?.Dispose();
                     _restClient?.Dispose();
                     _timerPing?.Dispose();
+                    
+                    // ✅ FIX: Dispose semaphore
+                    _startStopLock?.Dispose();
 
                     foreach (var q in _eventBuffers)
                         q.Value?.Dispose();
