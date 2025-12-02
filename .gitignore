@@ -261,3 +261,4 @@ __pycache__/
 *.pyc
 /App.config
 /VisualHFT.csproj.bak
+.nuget/
