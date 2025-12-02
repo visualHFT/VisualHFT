@@ -50,6 +50,25 @@ Learn more about **VisualHFT**'s architecture [here](https://visualhft.github.io
 
 Even though some of these items do not yet appear in the open‑source code, they are part of the project’s roadmap and will be added as development continues.
 
+## Performance Architecture
+
+VisualHFT uses a **multicast ring buffer** architecture for its real-time data bus, providing:
+
+| Metric | Performance |
+|--------|-------------|
+| Producer Latency (p50) | 50-100 nanoseconds |
+| Consumer Latency (p50) | 30-50 nanoseconds |
+| Throughput | 50-100M messages/second |
+| GC Allocations | Zero (modern API) |
+
+**Key Features:**
+- **Lock-free design**: No blocking, no contention
+- **Independent consumers**: Slow subscribers do not affect others
+- **Zero-copy API**: `ImmutableOrderBook` for studies that only read data
+- **Backward compatible**: Existing `Action<OrderBook>` callbacks still work
+
+See the [Multicast Ring Buffer Architecture](docs/MulticastRingBuffer-Architecture.md) documentation for migration guides and technical details.
+
 
 ## About the founder
 Ariel Silahian has been building high-frequency trading software for the past 10 years. Primarily using C++, for the core system, which always runs in a collocated server next to the exchange.
