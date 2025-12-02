@@ -42,6 +42,11 @@ namespace VisualHFT.Commons.Helpers.ObjectPools
         private readonly int[] _bucketSizes = { 5, 10, 20, 50, 100, 200, 500, 1000 };
         private readonly object[] _locks;
 
+        // Pool configuration constants
+        private const int INITIAL_STACK_CAPACITY = 64;
+        private const int PREWARM_COUNT = 16;
+        private const int MAX_BUCKET_SIZE = 256;
+
         private long _totalRents;
         private long _totalReturns;
         private long _poolHits;
@@ -60,12 +65,11 @@ namespace VisualHFT.Commons.Helpers.ObjectPools
 
             for (int i = 0; i < _bucketSizes.Length; i++)
             {
-                _buckets[i] = new Stack<OrderBookLevel[]>(64);
+                _buckets[i] = new Stack<OrderBookLevel[]>(INITIAL_STACK_CAPACITY);
                 _locks[i] = new object();
 
                 // Pre-warm with some arrays
-                var prewarmCount = Math.Min(16, 64);
-                for (int j = 0; j < prewarmCount; j++)
+                for (int j = 0; j < PREWARM_COUNT; j++)
                 {
                     _buckets[i].Push(new OrderBookLevel[_bucketSizes[i]]);
                 }
@@ -158,7 +162,7 @@ namespace VisualHFT.Commons.Helpers.ObjectPools
             lock (_locks[bucketIndex])
             {
                 // Don't grow the pool too large
-                if (_buckets[bucketIndex].Count < 256)
+                if (_buckets[bucketIndex].Count < MAX_BUCKET_SIZE)
                 {
                     _buckets[bucketIndex].Push(array);
                 }

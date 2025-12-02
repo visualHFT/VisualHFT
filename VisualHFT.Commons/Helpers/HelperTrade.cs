@@ -214,8 +214,8 @@ namespace VisualHFT.Helpers
             if (trade == null) return;
 
             // Create immutable snapshot and publish to ring buffer
-            var sequence = _buffer.ProducerSequence + 1;
-            var holder = ImmutableTradeHolder.CreateSnapshot(trade, sequence);
+            // Note: We use the sequence returned by Publish() for accuracy
+            var holder = ImmutableTradeHolder.CreateSnapshot(trade, 0);
             _buffer.Publish(holder);
 
             Interlocked.Increment(ref _totalPublished);

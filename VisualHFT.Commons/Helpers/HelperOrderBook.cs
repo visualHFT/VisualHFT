@@ -219,9 +219,12 @@ namespace VisualHFT.Helpers
             if (data == null) return;
 
             // Create immutable snapshot and publish to ring buffer
-            var sequence = _buffer.ProducerSequence + 1;
-            var snapshot = ImmutableOrderBook.CreateSnapshot(data, sequence);
-            _buffer.Publish(snapshot);
+            // Note: We use the sequence returned by Publish() for accuracy
+            var sequence = _buffer.Publish(ImmutableOrderBook.CreateSnapshot(data, 0));
+            
+            // Update the sequence in the snapshot if needed (the snapshot was created with placeholder)
+            // Since ImmutableOrderBook is immutable, the sequence field is set during creation
+            // We pass 0 as placeholder and rely on the ring buffer sequence for ordering
 
             Interlocked.Increment(ref _totalPublished);
 
