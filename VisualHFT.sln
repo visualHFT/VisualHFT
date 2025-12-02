@@ -61,6 +61,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OxyPlot.Wpf.Shared", "..\ox
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Studies.OTT_Ratio", "VisualHFT.Plugins\Studies.OTT_Ratio\Studies.OTT_Ratio.csproj", "{A3AA710A-47CB-58AC-A0C9-6A4987624B0C}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VisualHFT.Commons.Benchmarks", "VisualHFT.Commons.Benchmarks\VisualHFT.Commons.Benchmarks.csproj", "{65FC2936-7C6C-A678-1996-FD0AD74DDA3A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VisualHFT.Commons.TestingFramework", "VisualHFT.Commons.TestingFramework\VisualHFT.Commons.TestingFramework.csproj", "{A27E6C4D-BF16-2EF3-C8BA-8ED9DA1B914F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -167,6 +171,14 @@ Global
 		{A3AA710A-47CB-58AC-A0C9-6A4987624B0C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A3AA710A-47CB-58AC-A0C9-6A4987624B0C}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A3AA710A-47CB-58AC-A0C9-6A4987624B0C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{65FC2936-7C6C-A678-1996-FD0AD74DDA3A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{65FC2936-7C6C-A678-1996-FD0AD74DDA3A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{65FC2936-7C6C-A678-1996-FD0AD74DDA3A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{65FC2936-7C6C-A678-1996-FD0AD74DDA3A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A27E6C4D-BF16-2EF3-C8BA-8ED9DA1B914F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A27E6C4D-BF16-2EF3-C8BA-8ED9DA1B914F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A27E6C4D-BF16-2EF3-C8BA-8ED9DA1B914F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A27E6C4D-BF16-2EF3-C8BA-8ED9DA1B914F}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

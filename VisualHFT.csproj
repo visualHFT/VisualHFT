@@ -22,6 +22,8 @@
     <Compile Remove="demoTradingCore\**" />
     <Compile Remove="packages\**" />
     <Compile Remove="SDK-MarketConnectorTemplate\**" />
+    <Compile Remove="VisualHFT.Commons.Benchmarks\**" />
+    <Compile Remove="VisualHFT.Commons.TestingFramework\**" />
     <Compile Remove="VisualHFT.Commons.WPF\**" />
     <Compile Remove="VisualHFT.Commons\**" />
     <Compile Remove="VisualHFT.DataRetriever.TestingFramework\**" />
@@ -31,6 +33,8 @@
     <EmbeddedResource Remove="demoTradingCore\**" />
     <EmbeddedResource Remove="packages\**" />
     <EmbeddedResource Remove="SDK-MarketConnectorTemplate\**" />
+    <EmbeddedResource Remove="VisualHFT.Commons.Benchmarks\**" />
+    <EmbeddedResource Remove="VisualHFT.Commons.TestingFramework\**" />
     <EmbeddedResource Remove="VisualHFT.Commons.WPF\**" />
     <EmbeddedResource Remove="VisualHFT.Commons\**" />
     <EmbeddedResource Remove="VisualHFT.DataRetriever.TestingFramework\**" />
@@ -40,6 +44,8 @@
     <None Remove="demoTradingCore\**" />
     <None Remove="packages\**" />
     <None Remove="SDK-MarketConnectorTemplate\**" />
+    <None Remove="VisualHFT.Commons.Benchmarks\**" />
+    <None Remove="VisualHFT.Commons.TestingFramework\**" />
     <None Remove="VisualHFT.Commons.WPF\**" />
     <None Remove="VisualHFT.Commons\**" />
     <None Remove="VisualHFT.DataRetriever.TestingFramework\**" />
@@ -49,6 +55,8 @@
     <Page Remove="demoTradingCore\**" />
     <Page Remove="packages\**" />
     <Page Remove="SDK-MarketConnectorTemplate\**" />
+    <Page Remove="VisualHFT.Commons.Benchmarks\**" />
+    <Page Remove="VisualHFT.Commons.TestingFramework\**" />
     <Page Remove="VisualHFT.Commons.WPF\**" />
     <Page Remove="VisualHFT.Commons\**" />
     <Page Remove="VisualHFT.DataRetriever.TestingFramework\**" />

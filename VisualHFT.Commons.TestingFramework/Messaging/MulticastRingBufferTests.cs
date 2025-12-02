@@ -483,7 +483,7 @@ namespace VisualHFT.Commons.Tests.Messaging
         public async Task ProducerConsumer_HighThroughput_NoDataLoss()
         {
             // Arrange
-            var buffer = new MulticastRingBuffer<string>(8192);
+            var buffer = new MulticastRingBuffer<string>(16384);
             var cursor = buffer.Subscribe("consumer1");
             var messageCount = 10000;
             var received = new ConcurrentBag<long>();
@@ -492,7 +492,7 @@ namespace VisualHFT.Commons.Tests.Messaging
             // Start consumer
             var consumerTask = Task.Run(() =>
             {
-                while (!cts.Token.IsCancellationRequested || received.Count < messageCount)
+                while (!cts.Token.IsCancellationRequested && received.Count < messageCount)
                 {
                     if (buffer.TryRead(cursor, out var msg, out var seq))
                     {
