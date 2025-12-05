@@ -72,7 +72,7 @@ namespace VisualHFT
 
             while (true)
             {
-                await Task.Delay(5000);
+                await Task.Delay(35000);
                 GC.Collect(0, GCCollectionMode.Forced, false); //force garbage collection
             }
 

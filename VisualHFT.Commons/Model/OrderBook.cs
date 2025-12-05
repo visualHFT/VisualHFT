@@ -117,7 +117,7 @@ namespace VisualHFT.Model
         {
             get
             {
-                lock (_data.Lock)
+                using (_data.EnterReadLock())
                 {
                     if (_data.Asks == null)
                         return null;
@@ -134,7 +134,7 @@ namespace VisualHFT.Model
         {
             get
             {
-                lock (_data.Lock)
+                using (_data.EnterReadLock())
                 {
                     if (_data.Bids == null)
                         return null;
@@ -148,38 +148,74 @@ namespace VisualHFT.Model
         }
 
         /// <summary>
-        /// Creates a thread-safe snapshot of bids/asks for validation.
+        /// Returns a deep-copy snapshot of bids into the provided destination.
+        /// Each BookItem is copied via CopyFrom() to ensure isolation.
+        /// Returns actual count copied.
         /// </summary>
-        public BookItem[] GetBidsSnapshot()
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public int GetBidsSnapshot(Span<BookItem> destination)
         {
-            lock (_data.Lock)
+            ThrowIfDisposed();
+            using (_data.EnterReadLock())
             {
-                if (_data.Bids == null)
-                    return Array.Empty<BookItem>();
+                int maxCount = MaxDepth > 0 && FilterBidAskByMaxDepth ? MaxDepth : int.MaxValue;
+                var sourceSpan = _data.GetBidsSpan(maxCount);
 
-                if (MaxDepth > 0 && FilterBidAskByMaxDepth)
-                    return _data.Bids.Take(MaxDepth).ToArray();
-                else
-                    return _data.Bids.ToArray();
+                int countToCopy = Math.Min(sourceSpan.Length, destination.Length);
+
+                // ✅ DEEP COPY: Get pooled BookItems and copy data (not references)
+                for (int i = 0; i < countToCopy; i++)
+                {
+                    // Reuse existing pooled item if available, otherwise get new one
+                    if (destination[i] == null)
+                    {
+                        destination[i] = BookItemPool.Get();
+                    }
+
+                    // Deep copy to ensure snapshot isolation
+                    destination[i].CopyFrom(sourceSpan[i]);
+                }
+
+                return countToCopy;
             }
         }
-        public BookItem[] GetAsksSnapshot()
-        {
-            lock (_data.Lock)
-            {
-                if (_data.Asks == null)
-                    return Array.Empty<BookItem>();
 
-                if (MaxDepth > 0 && FilterBidAskByMaxDepth)
-                    return _data.Asks.Take(MaxDepth).ToArray();
-                else
-                    return _data.Asks.ToArray();
+        /// <summary>
+        /// Returns a deep-copy snapshot of asks into the provided destination.
+        /// Each BookItem is copied via CopyFrom() to ensure isolation.
+        /// Returns actual count copied.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public int GetAsksSnapshot(Span<BookItem> destination)
+        {
+            ThrowIfDisposed();
+            using (_data.EnterReadLock())
+            {
+                int maxCount = MaxDepth > 0 && FilterBidAskByMaxDepth ? MaxDepth : int.MaxValue;
+                var sourceSpan = _data.GetAsksSpan(maxCount);
+
+                int countToCopy = Math.Min(sourceSpan.Length, destination.Length);
+
+                // ✅ DEEP COPY: Get pooled BookItems and copy data (not references)
+                for (int i = 0; i < countToCopy; i++)
+                {
+                    // Reuse existing pooled item if available, otherwise get new one
+                    if (destination[i] == null)
+                    {
+                        destination[i] = BookItemPool.Get();
+                    }
+
+                    // Deep copy to ensure snapshot isolation
+                    destination[i].CopyFrom(sourceSpan[i]);
+                }
+
+                return countToCopy;
             }
         }
 
         public BookItem GetTOB(bool isBid)
         {
-            lock (_data.Lock)
+            using (_data.EnterReadLock())
             {
                 return _data.GetTOB(isBid);
             }
@@ -214,7 +250,7 @@ namespace VisualHFT.Model
         {
             if (inputExisting == null)
                 return;
-            lock (_data.Lock)
+            using (_data.EnterReadLock())
             {
                 IEnumerable<BookItem> listToMatch = (matchAgainsBids ? _data.Bids : _data.Asks);
                 if (listToMatch.Count() == 0)
@@ -265,7 +301,7 @@ namespace VisualHFT.Model
 
         public void CalculateMetrics()
         {
-            lock (_data.Lock)
+            using (_data.EnterReadLock())
             {
                 lobMetrics.LoadData(_data.Asks, _data.Bids, MaxDepth);
             }
@@ -274,26 +310,30 @@ namespace VisualHFT.Model
         public bool LoadData(IEnumerable<BookItem> asks, IEnumerable<BookItem> bids)
         {
             bool ret = true;
-            lock (_data.Lock)
+            using (_data.EnterWriteLock())
             {
-                #region Bids
+                _data.Clear();
+
                 if (bids != null)
                 {
-                    _data.Bids.Update(bids
-                        .Where(x => x != null && x.Price.HasValue && x.Size.HasValue)
-                        .OrderByDescending(x => x.Price.Value)
-                    );
+                    foreach (var bidItem in bids.Where(x => x != null && x.Price.HasValue && x.Size.HasValue).OrderByDescending(x => x.Price.Value))
+                    {
+                        var pooledItem = BookItemPool.Get();
+                        pooledItem.CopyFrom(bidItem);
+                        _data.Bids.Add(pooledItem);
+                    }
                 }
-                #endregion
-                #region Asks
+
                 if (asks != null)
                 {
-                    _data.Asks.Update(asks
-                        .Where(x => x != null && x.Price.HasValue && x.Size.HasValue)
-                        .OrderBy(x => x.Price.Value)
-                    );
+                    foreach (var askItem in asks.Where(x => x != null && x.Price.HasValue && x.Size.HasValue).OrderBy(x => x.Price.Value))
+                    {
+                        var pooledItem = BookItemPool.Get();
+                        pooledItem.CopyFrom(askItem);
+                        _data.Asks.Add(pooledItem);
+                    }
                 }
-                #endregion
+
                 _data.CalculateAccummulated();
             }
             CalculateMetrics();
@@ -305,7 +345,7 @@ namespace VisualHFT.Model
         {
             double _maxOrderSize = 0;
 
-            lock (_data.Lock)
+            using (_data.EnterReadLock())
             {
                 if (_data.Bids != null)
                     _maxOrderSize = _data.Bids.Where(x => x.Size.HasValue).DefaultIfEmpty(new BookItem()).Max(x => x.Size.Value);
@@ -317,7 +357,7 @@ namespace VisualHFT.Model
 
         public Tuple<double, double> GetMinMaxSizes()
         {
-            lock (_data.Lock)
+            using (_data.EnterReadLock())
             {
                 return _data.GetMinMaxSizes();
             }
@@ -338,7 +378,7 @@ namespace VisualHFT.Model
 
         public void PrintLOB(bool isBid)
         {
-            lock (_data.Lock)
+            using (_data.EnterReadLock())
             {
                 int _level = 0;
                 foreach (var item in isBid ? _data.Bids : _data.Asks)
@@ -393,7 +433,7 @@ namespace VisualHFT.Model
 
         public void UpdateSnapshot(IEnumerable<BookItem> asks, IEnumerable<BookItem> bids)
         {
-            lock (_data.Lock)
+            using (_data.EnterWriteLock())
             {
                 // Clear existing data and return items to shared pool to avoid allocation
                 _data.Clear();
@@ -433,7 +473,7 @@ namespace VisualHFT.Model
 
         public void Clear()
         {
-            lock (_data.Lock)
+            using (_data.EnterWriteLock())
             {
                 InternalClear();
                 _data.Clear();
@@ -442,7 +482,7 @@ namespace VisualHFT.Model
 
         public void Reset()
         {
-            lock (_data.Lock)
+            using (_data.EnterWriteLock())
             {
                 InternalClear();
                 _data?.Reset();
@@ -460,9 +500,8 @@ namespace VisualHFT.Model
                 DeleteLevel(item);     // explicit remove, not an update to zero
                 return;
             }
-            eMDUpdateAction eAction = eMDUpdateAction.None;
 
-            lock (_data.Lock)
+            using (_data.EnterWriteLock())
             {
                 var _list = (item.IsBid.HasValue && item.IsBid.Value ? _data.Bids : _data.Asks);
                 BookItem? itemFound = null;
@@ -481,17 +520,12 @@ namespace VisualHFT.Model
 
 
                 if (itemFound == null)
-                    eAction = eMDUpdateAction.New;
+                    AddLevel(item);
                 else
-                    eAction = eMDUpdateAction.Change;
+                    UpdateLevel(item);
             }
 
-            if (eAction == eMDUpdateAction.Change)
-                UpdateLevel(item);
-            else
-                AddLevel(item);
         }
-
         public virtual void AddLevel(DeltaBookItem item)
         {
             if (!item.IsBid.HasValue)
@@ -504,64 +538,61 @@ namespace VisualHFT.Model
             // quantize what we store so internals never carry float dust
             item.Size = QuantizeToDp(item.Size.Value, this.SizeDecimalPlaces);
 
-            lock (_data.Lock)
+            // Check if it is appropriate to add a new item to the Limit Order Book (LOB). 
+            // If the item exceeds the depth scope defined by MaxDepth, it should not be added.
+            // If the item is within the acceptable depth, truncate the LOB to ensure it adheres to the MaxDepth limit.
+            bool willNewItemFallOut = false;
+
+            var list = item.IsBid.Value ? _data.Bids : _data.Asks;
+            var listCount = list.Count();
+            if (item.IsBid.Value)
             {
-                // Check if it is appropriate to add a new item to the Limit Order Book (LOB). 
-                // If the item exceeds the depth scope defined by MaxDepth, it should not be added.
-                // If the item is within the acceptable depth, truncate the LOB to ensure it adheres to the MaxDepth limit.
-                bool willNewItemFallOut = false;
+                willNewItemFallOut = listCount > this.MaxDepth && item.Price < list.Min(x => x.Price);
+            }
+            else
+            {
+                willNewItemFallOut = listCount > this.MaxDepth && item.Price > list.Max(x => x.Price);
+            }
 
-                var list = item.IsBid.Value ? _data.Bids : _data.Asks;
-                var listCount = list.Count();
-                if (item.IsBid.Value)
+            if (!willNewItemFallOut)
+            {
+                // FIXED: Get from shared pool instead of instance pool
+                var _level = BookItemPool.Get();
+                _level.EntryID = item.EntryID;
+                _level.Price = item.Price;
+                _level.IsBid = item.IsBid.Value;
+                _level.LocalTimeStamp = item.LocalTimeStamp;
+                _level.ProviderID = _data.ProviderID;
+                _level.ServerTimeStamp = item.ServerTimeStamp;
+                _level.Size = item.Size;
+                _level.Symbol = _data.Symbol;
+                _level.PriceDecimalPlaces = this.PriceDecimalPlaces;
+                _level.SizeDecimalPlaces = this.SizeDecimalPlaces;
+                list.Add(_level);
+                listCount++;
+                Interlocked.Increment(ref _addedLevels);
+                if (_level.Size.HasValue && _level.Size.Value > 0)
                 {
-                    willNewItemFallOut = listCount > this.MaxDepth && item.Price < list.Min(x => x.Price);
-                }
-                else
-                {
-                    willNewItemFallOut = listCount > this.MaxDepth && item.Price > list.Max(x => x.Price);
+                    var scaled = Scale(_level.Size.Value);
+                    if (scaled > 0)
+                        Interlocked.Add(ref _addedVolumeScaled, scaled);
                 }
 
-                if (!willNewItemFallOut)
+                //truncate last item if we exceeded the MaxDepth
+                if (listCount > MaxDepth)
                 {
-                    // FIXED: Get from shared pool instead of instance pool
-                    var _level = BookItemPool.Get();
-                    _level.EntryID = item.EntryID;
-                    _level.Price = item.Price;
-                    _level.IsBid = item.IsBid.Value;
-                    _level.LocalTimeStamp = item.LocalTimeStamp;
-                    _level.ProviderID = _data.ProviderID;
-                    _level.ServerTimeStamp = item.ServerTimeStamp;
-                    _level.Size = item.Size;
-                    _level.Symbol = _data.Symbol;
-                    _level.PriceDecimalPlaces = this.PriceDecimalPlaces;
-                    _level.SizeDecimalPlaces = this.SizeDecimalPlaces;
-                    list.Add(_level);
-                    listCount++;
-                    Interlocked.Increment(ref _addedLevels);
-                    if (_level.Size.HasValue && _level.Size.Value > 0)
+                    // ALLOCATION-FREE: Direct index access
+                    int startIndex = MaxDepth; // First item to remove
+
+                    // Process excess items in reverse order (LIFO)
+                    for (int i = listCount - 1; i >= startIndex; i--)
                     {
-                        var scaled = Scale(_level.Size.Value);
-                        if (scaled > 0)
-                            Interlocked.Add(ref _addedVolumeScaled, scaled);
+                        var itemToReturn = list[i];
+                        BookItemPool.Return(itemToReturn);
                     }
 
-                    //truncate last item if we exceeded the MaxDepth
-                    if (listCount > MaxDepth)
-                    {
-                        // ALLOCATION-FREE: Direct index access
-                        int startIndex = MaxDepth; // First item to remove
-
-                        // Process excess items in reverse order (LIFO)
-                        for (int i = listCount - 1; i >= startIndex; i--)
-                        {
-                            var itemToReturn = list[i];
-                            BookItemPool.Return(itemToReturn);
-                        }
-
-                        // Truncate in one operation
-                        list.TruncateItemsAfterPosition(MaxDepth - 1);
-                    }
+                    // Truncate in one operation
+                    list.TruncateItemsAfterPosition(MaxDepth - 1);
                 }
             }
         }
@@ -576,47 +607,44 @@ namespace VisualHFT.Model
             // quantize what we store so internals never carry float dust
             item.Size = QuantizeToDp(item.Size.Value, this.SizeDecimalPlaces);
 
-            lock (_data.Lock)
-            {
-                (item.IsBid.HasValue && item.IsBid.Value ? _data.Bids : _data.Asks).Update(x => x.Price == item.Price,
-                    existingItem =>
+            (item.IsBid.HasValue && item.IsBid.Value ? _data.Bids : _data.Asks).Update(x => x.Price == item.Price,
+                existingItem =>
+                {
+                    double oldSize = existingItem.Size ?? 0.0;
+                    double newSize = item.Size ?? 0.0;
+
+                    if (oldSize > newSize)
                     {
-                        double oldSize = existingItem.Size ?? 0.0;
-                        double newSize = item.Size ?? 0.0;
+                        var delta = oldSize - newSize;
+                        var scaled = Scale(delta);
+                        if (scaled > 0) Interlocked.Add(ref _deletedVolumeScaled, scaled);
+                        Interlocked.Increment(ref _deletedLevels);
+                    }
+                    else if (oldSize < newSize)
+                    {
+                        var delta = newSize - oldSize;
+                        var scaled = Scale(delta);
+                        if (scaled > 0) Interlocked.Add(ref _addedVolumeScaled, scaled);
+                        Interlocked.Increment(ref _addedLevels);
+                    }
+                    else
+                    {
+                        Interlocked.Increment(ref _updatedLevels);
+                        // (Keep _updatedVolumeScaled unused; hook here if needed.)
+                    }
 
-                        if (oldSize > newSize)
-                        {
-                            var delta = oldSize - newSize;
-                            var scaled = Scale(delta);
-                            if (scaled > 0) Interlocked.Add(ref _deletedVolumeScaled, scaled);
-                            Interlocked.Increment(ref _deletedLevels);
-                        }
-                        else if (oldSize < newSize)
-                        {
-                            var delta = newSize - oldSize;
-                            var scaled = Scale(delta);
-                            if (scaled > 0) Interlocked.Add(ref _addedVolumeScaled, scaled);
-                            Interlocked.Increment(ref _addedLevels);
-                        }
-                        else
-                        {
-                            Interlocked.Increment(ref _updatedLevels);
-                            // (Keep _updatedVolumeScaled unused; hook here if needed.)
-                        }
-
-                        existingItem.Price = item.Price;
-                        existingItem.Size = item.Size;
-                        existingItem.LocalTimeStamp = item.LocalTimeStamp;
-                        existingItem.ServerTimeStamp = item.ServerTimeStamp;
-                    });
-            }
+                    existingItem.Price = item.Price;
+                    existingItem.Size = item.Size;
+                    existingItem.LocalTimeStamp = item.LocalTimeStamp;
+                    existingItem.ServerTimeStamp = item.ServerTimeStamp;
+                });
         }
 
         public virtual void DeleteLevel(DeltaBookItem item)
         {
             if (string.IsNullOrEmpty(item.EntryID) && (!item.Price.HasValue || item.Price.Value == 0))
                 throw new Exception("DeltaBookItem cannot be deleted since has no price or no EntryID.");
-            lock (_data.Lock)
+            using (_data.EnterWriteLock())
             {
                 BookItem _itemToDelete = null;
 
@@ -687,133 +715,6 @@ namespace VisualHFT.Model
 
 
 
-        /// <summary>
-        /// Computes the delta needed to transform THIS order book into <paramref name="other"/>,
-        /// emitting one <see cref="DeltaBookItem"/> per changed price level (absolute size; 0 = delete).
-        /// Performance: O(N+M) per side; allocation-free (uses pooled DeltaBookItem).
-        /// IMPORTANT: <paramref name="onDelta"/> MUST consume the item synchronously and copy its data.
-        /// This method RETURNS the pooled item immediately after invoking the callback.
-        /// </summary>
-        /// <param name="other">The newer snapshot for the same venue/symbol.</param>
-        /// <param name="onDelta">
-        /// Callback that receives one pooled DeltaBookItem per change. Do not retain the reference.
-        /// Typical usage: obLocal.AddOrUpdateLevel(delta);  // which copies fields synchronously
-        /// </param>
-        public void ComputeDeltaAgainst(OrderBook other, Action<DeltaBookItem> onDelta)
-        {
-            if (other == null) throw new ArgumentNullException(nameof(other));
-            if (onDelta == null) throw new ArgumentNullException(nameof(onDelta));
-
-            // Lock both books in a deterministic order to avoid deadlocks when called from multiple modules.
-            var lockA = _data.Lock;
-            var lockB = other._data.Lock;
-            int ha = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(lockA);
-            int hb = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(lockB);
-
-            if (ha <= hb)
-            {
-                lock (lockA) lock (lockB) { DiffBothSides_NoAlloc_(this, other, onDelta); }
-            }
-            else
-            {
-                lock (lockB) lock (lockA) { DiffBothSides_NoAlloc_(this, other, onDelta); }
-            }
-        }
-
-
-        private static void DiffBothSides_NoAlloc_(OrderBook oldBook, OrderBook newBook, Action<DeltaBookItem> emit)
-        {
-            // Access underlying storage directly to avoid MaxDepth filtering and extra wrappers.
-            var oldBids = oldBook._data.Bids;
-            var newBids = newBook._data.Bids;
-            var oldAsks = oldBook._data.Asks;
-            var newAsks = newBook._data.Asks;
-
-            DiffSide_NoAlloc_(oldBids, newBids, /*isBid*/ true, emit);
-            DiffSide_NoAlloc_(oldAsks, newAsks, /*isBid*/ false, emit);
-        }
-
-        private static void DiffSide_NoAlloc_(
-            CachedCollection<BookItem> oldSide,
-            CachedCollection<BookItem> newSide,
-            bool isBid,
-            Action<DeltaBookItem> emit)
-        {
-            int i = 0, j = 0;
-            int oldCount = oldSide == null ? 0 : oldSide.Count();
-            int newCount = newSide == null ? 0 : newSide.Count();
-
-            // Local function to emit a pooled delta and immediately return it to the pool.
-            static void Emit(bool isBidL, double price, double size, Action<DeltaBookItem> sink)
-            {
-                var d = DeltaBookItemPool.Get();
-                d.IsBid = isBidL;
-                d.Price = price;
-                d.Size = size;
-                d.LocalTimeStamp = DateTime.UtcNow; // caller may overwrite if needed
-                d.ServerTimeStamp = d.LocalTimeStamp;
-                sink(d);
-                DeltaBookItemPool.Return(d); // safe because consumer must copy synchronously
-            }
-
-            // Merge walk
-            while (i < oldCount && j < newCount)
-            {
-                var o = oldSide[i];
-                var n = newSide[j];
-
-                // Assuming exact price equality as elsewhere in the codebase (AddOrUpdateLevel uses ==).
-                double op = o.Price.GetValueOrDefault();
-                double np = n.Price.GetValueOrDefault();
-
-                if (op == np)
-                {
-                    // Same price level: update only if size changed
-                    double os = o.Size.GetValueOrDefault();
-                    double ns = n.Size.GetValueOrDefault();
-                    if (os != ns)
-                        Emit(isBid, np, ns, emit);
-
-                    i++; j++;
-                }
-                else
-                {
-                    // Determine ordering based on side sort (bids: desc, asks: asc)
-                    bool oldComesFirst = isBid ? (op > np) : (op < np);
-
-                    if (oldComesFirst)
-                    {
-                        // Level present in old but not (at this position) in new => removed (size -> 0)
-                        Emit(isBid, op, 0.0, emit);
-                        i++;
-                    }
-                    else
-                    {
-                        // Level present in new but not in old => added (size -> ns)
-                        Emit(isBid, np, n.Size.GetValueOrDefault(), emit);
-                        j++;
-                    }
-                }
-            }
-
-            // Any remaining old levels are deletions
-            while (i < oldCount)
-            {
-                var o = oldSide[i++];
-                double op = o.Price.GetValueOrDefault();
-                if (op != 0.0) Emit(isBid, op, 0.0, emit);
-            }
-
-            // Any remaining new levels are additions
-            while (j < newCount)
-            {
-                var n = newSide[j++];
-                double np = n.Price.GetValueOrDefault();
-                if (np != 0.0) Emit(isBid, np, n.Size.GetValueOrDefault(), emit);
-            }
-        }
-
-
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         private static double QuantizeToDp(double size, int dp)
         {
@@ -855,6 +756,11 @@ namespace VisualHFT.Model
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         private double Unscale(ulong scaled) => scaled / (double)_volumeScale;
 
+        private void ThrowIfDisposed()
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(OrderBook));
+        }
         protected virtual void Dispose(bool disposing)
         {
             if (!_disposed)
