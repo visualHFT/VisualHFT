@@ -5,7 +5,6 @@ using System.Threading.Tasks;
 using VisualHFT.Commons.Helpers;
 using VisualHFT.Commons.Model;
 using VisualHFT.Commons.PluginManager;
-using VisualHFT.Commons.Pools;
 using VisualHFT.Enums;
 using VisualHFT.Helpers;
 using VisualHFT.Model;
@@ -19,11 +18,6 @@ namespace VisualHFT.Studies
 {
     public class MarketResilienceStudy : BasePluginStudy
     {
-        private static class OrderBookSnapshotPool
-        {
-            // Create a pool for OrderBookSnapshot objects.
-            public static readonly CustomObjectPool<OrderBookSnapshot> Instance = new CustomObjectPool<OrderBookSnapshot>(maxPoolSize: 1000);
-        }
         private bool _disposed = false; // to track whether the object has been disposed
         private PlugInSettings _settings;
 
@@ -116,7 +110,8 @@ namespace VisualHFT.Studies
             if (_settings.Provider.ProviderID != e.ProviderID || _settings.Symbol != e.Symbol)
                 return;
 
-            OrderBookSnapshot snapshot = OrderBookSnapshotPool.Instance.Get();
+            // ✅ CHANGED: Use struct factory method instead of pool
+            var snapshot = OrderBookSnapshot.Create();
             // Initialize its state based on the master OrderBook.
             snapshot.UpdateFrom(e);
             // Enqueue for processing.
@@ -131,7 +126,8 @@ namespace VisualHFT.Studies
         {
             mrCalc.OnOrderBookUpdate(e);
             DoCalculationAndSend();
-            OrderBookSnapshotPool.Instance.Return(e);
+            // ✅ CHANGED: Dispose snapshot to return arrays to pool
+            e.Dispose();
         }
         private void QUEUE_onError(Exception ex)
         {
@@ -192,7 +188,8 @@ namespace VisualHFT.Studies
                 {
                     HelperOrderBook.Instance.Unsubscribe(LIMITORDERBOOK_OnDataReceived);
                     HelperTrade.Instance.Unsubscribe(TRADE_OnDataReceived);
-                    OrderBookSnapshotPool.Instance.Dispose();
+                    // ❌ REMOVED: OrderBookSnapshotPool no longer exists
+                    // OrderBookSnapshotPool.Instance.Dispose();
 
                     _QUEUE.Dispose();
                     mrCalc.Dispose();

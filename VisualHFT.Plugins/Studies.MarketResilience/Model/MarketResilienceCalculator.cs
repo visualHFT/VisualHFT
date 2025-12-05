@@ -40,7 +40,7 @@ namespace Studies.MarketResilience.Model
 
 
         // ---------- STATE (you already asked for this name) ----------
-        protected OrderBookSnapshot _previousLOB = null;
+        protected OrderBookSnapshot? _previousLOB = null;
         protected eLOBSIDE _lastReportedDepletion = eLOBSIDE.NONE;
 
 
@@ -144,9 +144,8 @@ namespace Studies.MarketResilience.Model
         {
             lock (_syncLock)
             {
-                if (orderBook == null
-                    || orderBook.Asks == null || orderBook.Bids == null
-                    || !orderBook.Asks.Any() || !orderBook.Bids.Any())
+                if (orderBook.Asks == null || orderBook.Bids == null
+                    || orderBook.Asks.Length == 0 || orderBook.Bids.Length == 0)
                     return;
 
                 // ═══════════════════════════════════════════════════════════════
@@ -513,7 +512,6 @@ namespace Studies.MarketResilience.Model
                 No allocations:
                 Pure loops, P² quantiles keep constant space, no LINQ.             */
 
-            if (lob == null) { return eLOBSIDE.NONE; }
 
             // 1) Update SPREAD baseline first (used to normalize distances)
             double spreadNow = lob.Spread > 0 ? lob.Spread : ((_previousLOB?.Spread).GetValueOrDefault(0));
@@ -621,7 +619,7 @@ namespace Studies.MarketResilience.Model
         internal eLOBSIDE IsLOBRecovered(in OrderBookSnapshot lob)
         {
             // No active event → nothing to recover
-            if (_activeDepth == null || lob == null)
+            if (_activeDepth == null)
             {
                 _previousLOB = lob;
                 return eLOBSIDE.NONE;
@@ -721,13 +719,13 @@ namespace Studies.MarketResilience.Model
         private static double ImmediacyDepthBid(in OrderBookSnapshot lob, double spreadBase)
         {
             if (spreadBase <= EPS) spreadBase = Math.Max(lob.Spread, 1.0); // guard
-            if (lob.Bids.Count == 0) return 0; // empty side → zero immediacy
+            if (lob.Bids.Length == 0) return 0; // empty side → zero immediacy
 
             double best = lob.Bids[0].Price.Value;
             double acc = 0.0;
 
             var levels = lob.Bids; // assume best-first ordering
-            int n = levels?.Count ?? 0;
+            int n = levels.Length;
             for (int i = 0; i < n; i++)
             {
                 double d = (best - levels[i].Price.Value) / spreadBase; // ≥ 0
@@ -740,13 +738,13 @@ namespace Studies.MarketResilience.Model
         private static double ImmediacyDepthAsk(in OrderBookSnapshot lob, double spreadBase)
         {
             if (spreadBase <= EPS) spreadBase = Math.Max(lob.Spread, 1.0);
-            if (lob.Asks.Count == 0) return 0; // empty side → zero immediacy
+            if (lob.Asks.Length == 0) return 0; // empty side → zero immediacy
 
             double best = lob.Asks[0].Price.Value;
             double acc = 0.0;
 
             var levels = lob.Asks;
-            int n = levels?.Count ?? 0;
+            int n = levels.Length;
             for (int i = 0; i < n; i++)
             {
                 double d = (levels[i].Price.Value - best) / spreadBase; // ≥ 0

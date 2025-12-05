@@ -117,8 +117,10 @@ using OxyPlot.Axes;
 using OxyPlot.Series;
 using Prism.Mvvm;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Linq;
 using System.Windows;
 using System.Windows.Threading;
@@ -127,6 +129,7 @@ using VisualHFT.Commons.Pools;
 using VisualHFT.Enums;
 using VisualHFT.Helpers;
 using VisualHFT.Model;
+using Windows.Foundation.Collections;
 using AxisPosition = OxyPlot.Axes.AxisPosition;
 
 
@@ -140,11 +143,6 @@ namespace VisualHFT.ViewModel
         private readonly TimeSpan _MIN_UI_REFRESH_TS = TimeSpan.FromMilliseconds(60); //For the UI: do not allow less than this, since it is not noticeble for human eye
 
         
-        private static class OrderBookSnapshotPool
-        {
-            public static readonly CustomObjectPool<OrderBookSnapshot> Instance = new 
-                CustomObjectPool<OrderBookSnapshot>(maxPoolSize: _MAX_CHART_POINTS + (int)(_MAX_CHART_POINTS*1.1));
-        }
         private static class ScatterPointsPool
         {
             public static readonly CustomObjectPool<OxyPlot.Series.ScatterPoint> Instance = 
@@ -165,11 +163,9 @@ namespace VisualHFT.ViewModel
         private string _selectedSymbol;
         private VisualHFT.ViewModel.Model.Provider _selectedProvider = null;
         private AggregationLevel _aggregationLevelSelection;
-
         private List<BookItem> _bidsGrid;
         private List<BookItem> _asksGrid;
         private CachedCollection<BookItem> _depthGrid;
-
         private ObservableCollection<VisualHFT.ViewModel.Model.Provider> _providers;
 
         private BookItem _AskTOB = new BookItem();
@@ -568,6 +564,7 @@ namespace VisualHFT.ViewModel
                     RaisePropertyChanged(nameof(Spread));
                     RaisePropertyChanged(nameof(LOBImbalanceValue));
 
+
                     RaisePropertyChanged(nameof(Bids));
                     RaisePropertyChanged(nameof(Asks));
                     RaisePropertyChanged(nameof(Depth));
@@ -630,7 +627,8 @@ namespace VisualHFT.ViewModel
 
 
             e.CalculateMetrics();
-            OrderBookSnapshot snapshot = OrderBookSnapshotPool.Instance.Get();
+            // ✅ CHANGED: Use struct factory method instead of pool
+            var snapshot = OrderBookSnapshot.Create();
             // Initialize its state based on the master OrderBook.
             snapshot.UpdateFrom(e);
             // Enqueue for processing.
@@ -638,32 +636,24 @@ namespace VisualHFT.ViewModel
         }
         private void _AGGREGATED_LOB_OnRemoving(object? sender, OrderBookSnapshot e)
         {
-            // Perform cleanup BEFORE returning the object to the pool
+            // Perform cleanup BEFORE disposing the arrays
             lock (RealTimeSpreadModel.SyncRoot)
                 RemoveLastPointToSpreadChart();
             lock (RealTimePricePlotModel.SyncRoot)
                 RemoveLastPointsToScatterChart();
 
-            // NOW it is safe to return the object to the pool
-            OrderBookSnapshotPool.Instance.Return(e);
+            // ✅ CHANGED: Dispose to return arrays to pool (idempotent, safe to call multiple times)
+            e.Dispose();
+            
+            // ❌ REMOVED: No longer needed - struct doesn't pool itself
+            // OrderBookSnapshotPool.Instance.Return(e);
         }
         private void _AGGREGATED_LOB_OnRemoved(object? sender, int index)
         {
-            //for current snapshot, make sure to return to the pool 
-            if (index == -1)
-                OrderBookSnapshotPool.Instance.Reset(); //reset the entire pool
+            // ❌ REMOVED: Struct snapshots don't need pool reset
 
-            //remove last points on the chart
-            if (index == 0) //make sure the item is the last
-            {
-                // This logic is now moved to _AGGREGATED_LOB_OnRemoving
-                /*
-                lock (RealTimeSpreadModel.SyncRoot)
-                    RemoveLastPointToSpreadChart();
-                lock (RealTimePricePlotModel.SyncRoot)
-                    RemoveLastPointsToScatterChart();
-                */
-            }
+            // Note: Cleanup is now handled in _AGGREGATED_LOB_OnRemoving via Dispose()
+            // which is called BEFORE the item is removed from the collection
         }
 
 
@@ -700,7 +690,8 @@ namespace VisualHFT.ViewModel
 
             if (!addedOK)
             {
-                OrderBookSnapshotPool.Instance.Return(ob);
+                // ✅ CHANGED: Dispose snapshot (returns arrays to pool) if not added
+                ob.Dispose();
                 return;
             }
 
@@ -724,13 +715,16 @@ namespace VisualHFT.ViewModel
             }
 
             // ✅ PHASE 4: Create scatter points OUTSIDE ANY LOCKS
+            // Convert spans to arrays for filtering (temporary allocations, but minimal)
+            var bidsArray = lobItemToDisplay.Bids.ToArray();
+            var asksArray = lobItemToDisplay.Asks.ToArray();
+            
             var bidLevelPoints = ToScatterPointsLevels(
-                lobItemToDisplay.Bids.Where(x => x.Price >= _MidPoint * 0.99),
+                bidsArray.Where(x => x.Price >= _MidPoint * 0.99).ToArray(),
                 sharedTS);
             var askLevelPoints = ToScatterPointsLevels(
-                lobItemToDisplay.Asks.Where(x => x.Price <= _MidPoint * 1.01),
+                asksArray.Where(x => x.Price <= _MidPoint * 1.01).ToArray(),
                 sharedTS);
-
             try
             {
                 // ✅ PHASE 5: Update scatter chart (Level 3 lock)
@@ -768,15 +762,15 @@ namespace VisualHFT.ViewModel
 
         private DataPoint? ToDataPointBestBid(OrderBookSnapshot? lob, double sharedTS)
         {
-            if (lob != null && lob.Bids != null && lob.Bids.Count > 0 && lob.Bids[0].Price.HasValue)
-                return new DataPoint(sharedTS, lob.Bids[0].Price.Value);
+            if (lob.HasValue && lob.Value.Bids.Length > 0 && lob.Value.Bids[0]?.Price.HasValue == true)
+                return new DataPoint(sharedTS, lob.Value.Bids[0].Price.Value);
             else
                 return null;
         }
         private DataPoint? ToDataPointBestAsk(OrderBookSnapshot? lob, double sharedTS)
         {
-            if (lob != null && lob.Asks != null && lob.Asks.Count > 0 && lob.Asks[0].Price.HasValue)
-                return new DataPoint(sharedTS, lob.Asks[0].Price.Value);
+            if (lob.HasValue && lob.Value.Asks.Length > 0 && lob.Value.Asks[0]?.Price.HasValue == true)
+                return new DataPoint(sharedTS, lob.Value.Asks[0].Price.Value);
             else
                 return null;
         }
@@ -789,10 +783,10 @@ namespace VisualHFT.ViewModel
             return new DataPoint(sharedTS, lob.Spread);
         }
         private List<OxyPlot.Series.ScatterPoint> ToScatterPointsLevels(
-            IEnumerable<BookItem> lobList,
+            ReadOnlySpan<BookItem> lobSpan,
             double sharedTS)
         {
-            if (lobList == null || !lobList.Any())
+            if (lobSpan.IsEmpty)
             {
                 var emptyList = ScatterPointsListPool.Instance.Get();
                 emptyList.Clear();
@@ -803,6 +797,9 @@ namespace VisualHFT.ViewModel
             var scatterPoints = ScatterPointsListPool.Instance.Get();
             scatterPoints.Clear();
 
+            // Convert span to array for LINQ operations (temporary allocation)
+            var lobList = lobSpan.ToArray();
+            
             // Size normalization logic
             _minScatterBubbleSize = Math.Min(_minScatterBubbleSize, lobList.Min(x => x.Size.Value));
             _maxScatterBubbleSize = Math.Max(_maxScatterBubbleSize, lobList.Max(x => x.Size.Value));
@@ -829,9 +826,13 @@ namespace VisualHFT.ViewModel
             }
             return scatterPoints; // ← List will be returned to pool, ScatterPoints will live in chart
         }
-        private IEnumerable<DataPoint> ToDataPointsCumulativeVolume(List<BookItem> lobList, double sharedTS)
+        private IEnumerable<DataPoint> ToDataPointsCumulativeVolume(ReadOnlySpan<BookItem> lobSpan, double sharedTS)
         {
-            var retItems = new List<DataPoint>(lobList.Count);
+            if (lobSpan.IsEmpty)
+                return Enumerable.Empty<DataPoint>();
+            
+            var lobList = lobSpan.ToArray(); // Temporary conversion for processing
+            var retItems = new List<DataPoint>(lobList.Length);
             double cumulativeVol = 0;
 
             foreach (var level in lobList)
@@ -1085,7 +1086,6 @@ namespace VisualHFT.ViewModel
                 _AGGREGATED_LOB.OnRemoving += _AGGREGATED_LOB_OnRemoving;
             }
 
-            OrderBookSnapshotPool.Instance.Reset(); //reset the entire pool
             ScatterPointsPool.Instance.Reset();
 
             Dispatcher.CurrentDispatcher.BeginInvoke(() =>
@@ -1110,7 +1110,6 @@ namespace VisualHFT.ViewModel
 
         }
 
-
         /// <summary>
         /// Bids the ask grid update.
         /// Update our internal lists trying to re-use the current items on the list.
@@ -1119,29 +1118,16 @@ namespace VisualHFT.ViewModel
         /// <param name="orderBook">The order book.</param>
         private void BidAskGridUpdate(OrderBookSnapshot orderBook)
         {
-            if (orderBook == null)
-                return;
-
             GridListUpdate(_asksGrid, orderBook.Asks);
             GridListUpdate(_bidsGrid, orderBook.Bids);
-
-            //commented out for now
-            /*if (_asksGrid != null && _bidsGrid != null)
-            {
-                _depthGrid.Clear();
-                foreach (var item in _asksGrid)
-                    _depthGrid.Add(item);
-                foreach (var item in _bidsGrid)
-                    _depthGrid.Add(item);
-            }*/
         }
 
-        private void GridListUpdate(List<BookItem> currentList, List<BookItem> newList)
+        private void GridListUpdate(List<BookItem> currentList, ReadOnlySpan<BookItem> newList)
         {
             // Update existing items and add/remove as needed
-            for (int i = 0; i < Math.Max(currentList.Count, newList.Count); i++)
+            for (int i = 0; i < Math.Max(currentList.Count, newList.Length); i++)
             {
-                if (i < newList.Count)
+                if (i < newList.Length)
                 {
                     if (i < currentList.Count)
                         UpdateBookItem(currentList[i], newList[i]); // Update existing item
@@ -1271,7 +1257,7 @@ namespace VisualHFT.ViewModel
         public PlotModel RealTimePricePlotModel { get; set; }
         public PlotModel RealTimeSpreadModel { get; set; }
         public PlotModel CummulativeBidsChartModel { get; set; }
-        public PlotModel CummulativeAsksChartModel { get; set; }
+        public PlotModel CummulativeAsksChartModel { get; }
 
 
         public int SwitchView
@@ -1299,11 +1285,10 @@ namespace VisualHFT.ViewModel
                     _dialogs = null;
                     _realTimeTrades?.Clear();
                     _depthGrid?.Clear();
+                    _providers?.Clear();
                     _bidsGrid?.Clear();
                     _asksGrid?.Clear();
-                    _providers?.Clear();
                     ScatterPointsPool.Instance.Dispose();
-                    OrderBookSnapshotPool.Instance.Dispose();
                     ScatterPointsListPool.Instance.Dispose();
                     _QUEUE?.Dispose();
 

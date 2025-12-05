@@ -1,12 +1,51 @@
-﻿using VisualHFT.Commons.Model;
+﻿using System.Runtime.CompilerServices;
+using VisualHFT.Commons.Model;
 using VisualHFT.Commons.Pools;
-using VisualHFT.Helpers;
 using VisualHFT.Enums;
+using VisualHFT.Helpers;
 
 namespace VisualHFT.Model
 {
     public class OrderBookData : IResettable, IDisposable
     {
+        // Helper classes for RAII pattern:
+        private sealed class ReadLockReleaser : IDisposable
+        {
+            private readonly ReaderWriterLockSlim _lock;
+            public ReadLockReleaser(ReaderWriterLockSlim rwLock) => _lock = rwLock;
+            public void Dispose() => _lock.ExitReadLock();
+        }
+
+        private sealed class WriteLockReleaser : IDisposable
+        {
+            private readonly ReaderWriterLockSlim _lock;
+            public WriteLockReleaser(ReaderWriterLockSlim rwLock) => _lock = rwLock;
+            public void Dispose() => _lock.ExitWriteLock();
+        }
+
+        private readonly ReaderWriterLockSlim _rwLock = new ReaderWriterLockSlim(LockRecursionPolicy.SupportsRecursion);
+        /// <summary>
+        /// Enters a read lock. Use in 'using' statement for automatic cleanup.
+        /// </summary>
+        public IDisposable EnterReadLock()
+        {
+            _rwLock.EnterReadLock();
+            return new ReadLockReleaser(_rwLock);
+        }
+        /// <summary>
+        /// Enters a write lock. Use in 'using' statement for automatic cleanup.
+        /// </summary>
+        public IDisposable EnterWriteLock()
+        {
+            _rwLock.EnterWriteLock();
+            return new WriteLockReleaser(_rwLock);
+        }
+
+
+
+
+
+
         private bool _disposed = false; // to track whether the object has been disposed
         private CachedCollection<BookItem> _Asks;
         private CachedCollection<BookItem> _Bids;
@@ -34,7 +73,6 @@ namespace VisualHFT.Model
         public int MaxDepth { get; set; }
         public double MaximumCummulativeSize { get; set; }
         public double ImbalanceValue { get; set; }
-        public object Lock { get; } = new object();
         public BookItem GetTOB(bool isBid)
         {
             if (isBid)
@@ -167,12 +205,42 @@ namespace VisualHFT.Model
             }
         }
 
+
+        /// <summary>
+        /// Returns a read-only span of asks WITHOUT allocating.
+        /// MUST be called while holding Lock.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public ReadOnlySpan<BookItem> GetAsksSpan(int maxCount = int.MaxValue)
+        {
+            // Caller MUST hold Lock!
+            if (_Asks == null)
+                return ReadOnlySpan<BookItem>.Empty;
+
+            return _Asks.AsSpan(maxCount);
+        }
+
+        /// <summary>
+        /// Returns a read-only span of bids WITHOUT allocating.
+        /// MUST be called while holding Lock.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public ReadOnlySpan<BookItem> GetBidsSpan(int maxCount = int.MaxValue)
+        {
+            // Caller MUST hold Lock!
+            if (_Bids == null)
+                return ReadOnlySpan<BookItem>.Empty;
+
+            return _Bids.AsSpan(maxCount);
+        }
+
         protected virtual void Dispose(bool disposing)
         {
             if (!_disposed)
             {
                 if (disposing)
                 {
+                    _rwLock?.Dispose();
                     _Bids?.Clear();
                     _Asks?.Clear();
                     _Bids = null;

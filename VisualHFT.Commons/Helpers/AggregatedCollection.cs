@@ -12,7 +12,7 @@ using VisualHFT.Enums;
  */
 namespace VisualHFT.Helpers
 {
-    public class AggregatedCollection<T> : IDisposable, IEnumerable<T> where T : class, new()
+    public class AggregatedCollection<T> : IDisposable, IEnumerable<T> where T : new()
     {
         private bool _disposed = false; // to track whether the object has been disposed
         private TimeSpan _aggregationSpan;

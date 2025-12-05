@@ -1,10 +1,5 @@
 ﻿using System.Collections;
-using System.Collections.ObjectModel;
-using VisualHFT.Commons.Model;
-using VisualHFT.Commons.Pools;
-using System.Collections.Generic;
-using System.Linq;
-using System;
+using System.Runtime.CompilerServices;
 
 namespace VisualHFT.Helpers
 {
@@ -320,6 +315,28 @@ namespace VisualHFT.Helpers
                 }
                 // If v is greater than or equal to the last index, nothing to truncate.
             }
+        }
+
+
+        /// <summary>
+        /// Returns a read-only span view of the internal list WITHOUT allocating.
+        /// Uses CollectionsMarshal for zero-copy access to List's internal array.
+        /// WARNING: Span is only valid while the lock is held!
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public ReadOnlySpan<T> AsSpan(int maxCount = int.MaxValue)
+        {
+            // ⚠️ CALLER MUST HOLD _lock!
+            // This method does NOT lock internally to avoid nested locks
+
+            if (_internalList == null || _internalList.Count == 0)
+                return ReadOnlySpan<T>.Empty;
+
+            // Use CollectionsMarshal to access List's internal array (ZERO COPY!)
+            var span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_internalList);
+
+            int count = Math.Min(span.Length, maxCount);
+            return span.Slice(0, count);
         }
     }
 }
