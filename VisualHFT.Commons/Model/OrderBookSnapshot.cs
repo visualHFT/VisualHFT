@@ -446,14 +446,14 @@ namespace VisualHFT.Commons.Model
         /// Zero-cost retrieval (no iteration).
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public readonly Tuple<double, double> GetMinMaxSizes()
+        public readonly (double Item1, double Item2) GetMinMaxSizes()
         {
             if (!_minMaxValid)
-                return new Tuple<double, double>(0, 0);
+                return (0, 0);
 
-            return Tuple.Create(_minSize, _maxSize);
+            return (_minSize, _maxSize);
         }
-        
+
         #endregion
     }
 }

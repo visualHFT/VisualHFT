@@ -91,88 +91,50 @@ namespace VisualHFT.Commons.Pools
         private static readonly CustomObjectPool<BookItem> _instance =
             new CustomObjectPool<BookItem>(maxPoolSize: POOL_SIZE);
 
-        // Thread-safe statistics using long fields (accessed via Interlocked)
-        private static long _totalGets = 0;
-        private static long _totalReturns = 0;
-        private static long _peakUtilization = 0; // Stored as integer (0-POOL_SIZE) for atomic operations
+        // OPTIMIZED: Statistics now derived from CustomObjectPool's internal counters
+        // Peak tracking moved to lazy evaluation to avoid per-call overhead
+        private static long _peakUtilization = 0; // Updated lazily, not on every call
+        private static long _lastPeakCheckGets = 0; // For sparse peak updates
 
         /// <summary>
         /// Thread-safe: Gets a BookItem from the pool.
         /// ULTRA-HIGH-PERFORMANCE: Zero allocation, zero reflection, zero type checking, maximum inlining.
+        /// OPTIMIZED: Removed per-call statistics tracking - delegated to CustomObjectPool.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static BookItem Get()
         {
-            Interlocked.Increment(ref _totalGets);
-            var item = _instance.Get();
-
-            // Track peak utilization atomically
-            var currentUtilization = (long)(_instance.UtilizationPercentage * POOL_SIZE); // Store as integer (0-POOL_SIZE)
-            var currentPeak = Interlocked.Read(ref _peakUtilization);
-            if (currentUtilization > currentPeak)
-            {
-                Interlocked.CompareExchange(ref _peakUtilization, currentUtilization, currentPeak);
-            }
-
-            return item;
+            // OPTIMIZED: CustomObjectPool now tracks TotalGets internally via head pointer
+            // No additional Interlocked operations needed here
+            return _instance.Get();
         }
 
         /// <summary>
         /// Thread-safe: Returns a basic BookItem to the pool.
-        /// ULTRA-HIGH-PERFORMANCE: Interface constraint + runtime validation for safety.
-        /// This method can ONLY accept basic BookItems due to interface constraint,
-        /// but includes runtime validation to reject L3 items with order data.
+        /// ULTRA-HIGH-PERFORMANCE: Zero overhead return path.
+        /// OPTIMIZED: Removed reflection - L3 validation moved to BookItemPool smart dispatcher.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Return(IBasicBookItem item)
         {
             if (item == null) return;
 
-            var bookItem = (BookItem)item; // Zero-cost cast
-
-            // SAFETY CHECK: Ensure this is truly a basic BookItem without L3 data
-            // Use try-catch to avoid compile-time dependencies on L3 properties
-            try
-            {
-                // Check if the item has L3 order data using reflection (fail-safe approach)
-                var itemType = bookItem.GetType();
-                var allLevelOrdersProperty = itemType.GetProperty("AllLevelOrders");
-                if (allLevelOrdersProperty != null)
-                {
-                    var allLevelOrders = allLevelOrdersProperty.GetValue(bookItem);
-                    if (allLevelOrders != null)
-                    {
-                        throw new InvalidOperationException(
-                            "Pool Error: Cannot return extended BookItem with order data to basic pool. " +
-                            "Use appropriate pool or smart dispatcher instead.");
-                    }
-                }
-            }
-            catch (InvalidOperationException)
-            {
-                // Re-throw our own validation exception
-                throw;
-            }
-            catch
-            {
-                // If reflection fails, continue with return (fail-safe behavior)
-                // This handles cases where L3 extensions aren't loaded
-            }
-
-            Interlocked.Increment(ref _totalReturns);
-            _instance.Return(bookItem);
+            // OPTIMIZED: No reflection! L3 validation is handled by BookItemPool's smart dispatcher
+            // which routes L3 items to BookItemL3Pool before they ever reach here.
+            // CustomObjectPool tracks returns internally, no additional counter needed.
+            _instance.Return((BookItem)item);
         }
 
         /// <summary>
-        /// Legacy method: Returns a BookItem to the pool (for backward compatibility).
-        /// NOTE: This method should be avoided in high-frequency paths.
-        /// Use Return(IBasicBookItem) overload for maximum performance.
+        /// Returns a BookItem to the pool.
+        /// ULTRA-HIGH-PERFORMANCE: Direct delegation to underlying pool.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Return(BookItem item)
         {
-            // Route to interface-based method for consistency
-            Return((IBasicBookItem)item);
+            if (item == null) return;
+            // OPTIMIZED: Direct call to pool, no indirection
+            _instance.Return(item);
         }
 
         /// <summary>
@@ -187,18 +149,36 @@ namespace VisualHFT.Commons.Pools
 
         /// <summary>
         /// Thread-safe: Gets the total number of Get() operations performed.
+        /// Derived from underlying CustomObjectPool for zero additional overhead.
         /// </summary>
-        public static long TotalGets => Interlocked.Read(ref _totalGets);
+        public static long TotalGets => _instance.TotalGets;
 
         /// <summary>
         /// Thread-safe: Gets the total number of Return() operations performed.
+        /// Derived from underlying CustomObjectPool for zero additional overhead.
         /// </summary>
-        public static long TotalReturns => Interlocked.Read(ref _totalReturns);
+        public static long TotalReturns => _instance.TotalReturns;
 
         /// <summary>
         /// Thread-safe: Gets the peak utilization percentage reached (0.0 to 1.0).
+        /// Always updates peak when accessed to ensure accuracy.
         /// </summary>
-        public static double PeakUtilization => Interlocked.Read(ref _peakUtilization) / (double)POOL_SIZE;
+        public static double PeakUtilization
+        {
+            get
+            {
+                // Always calculate current utilization and update peak if higher
+                var currentUtil = (long)(_instance.UtilizationPercentage * POOL_SIZE);
+                var currentPeak = Volatile.Read(ref _peakUtilization);
+
+                if (currentUtil > currentPeak)
+                {
+                    Interlocked.CompareExchange(ref _peakUtilization, currentUtil, currentPeak);
+                }
+
+                return Volatile.Read(ref _peakUtilization) / (double)POOL_SIZE;
+            }
+        }
 
         /// <summary>
         /// Thread-safe: Gets information about current pool status for monitoring/debugging.
@@ -220,9 +200,11 @@ namespace VisualHFT.Commons.Pools
         /// </summary>
         public static void ResetStatistics()
         {
-            Interlocked.Exchange(ref _totalGets, 0);
-            Interlocked.Exchange(ref _totalReturns, 0);
             Interlocked.Exchange(ref _peakUtilization, 0);
+            Interlocked.Exchange(ref _lastPeakCheckGets, 0);
+
+            // Reset underlying CustomObjectPool counters and refill with objects
+            _instance.Reset();
         }
 
         /// <summary>

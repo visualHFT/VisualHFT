@@ -21,7 +21,7 @@ namespace VisualHFT.Commons.Pools
         private long _tail;  // Points to next position to put item
 
         // Statistics
-        private long _totalGets;
+        // Note: TotalGets is derived from _head pointer, no separate counter needed
         private long _totalReturns;
         private long _totalCreated;
         private bool _disposed = false;
@@ -51,6 +51,9 @@ namespace VisualHFT.Commons.Pools
                 Interlocked.Increment(ref _totalCreated);
             }
 
+
+
+            
             // Set tail to indicate how many objects are available
             _tail = prewarmCount;
         }
@@ -126,49 +129,33 @@ namespace VisualHFT.Commons.Pools
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public T Get()
         {
-            Interlocked.Increment(ref _totalGets);
-
-            // Lock-free get using compare-and-swap
-            long currentHead, newHead, currentTail;
-            do
-            {
-                currentHead = Interlocked.Read(ref _head);
-                currentTail = Interlocked.Read(ref _tail);
-
-                // Check if pool is empty
-                if (currentHead >= currentTail)
-                {
-                    // Pool exhausted - create new object (but log this for monitoring)
-                    Interlocked.Increment(ref _totalCreated);
-
-                    if (_totalCreated % 20000 == 0) // Log every 20000 creations
-                    {
-                        var typeName = typeof(T).Name;
-                        string message = $"CustomObjectPool<{typeName}> exhausted - created {_totalCreated} total objects. Consider increasing pool size. Instantiated by: {_instantiator}";
-                        log.Warn(message);
-                    }
-                    return new T();
-                }
-
-                newHead = currentHead + 1;
-
-            } while (Interlocked.CompareExchange(ref _head, newHead, currentHead) != currentHead);
+            // Single atomic increment - this IS the Get operation
+            long currentHead = Interlocked.Increment(ref _head) - 1;
 
             // Get object from array using fast modulo (bitwise AND with mask)
             var index = (int)(currentHead & _mask);
-            var item = _objects[index];
 
-            // Defensive check - if we got null somehow, create a new object
-            if (item == null)
+            // ALWAYS try to get from array first - handles post-exhaustion recovery
+            var item = Interlocked.Exchange(ref _objects[index], null);
+
+            // If we got an object, return it
+            if (item != null)
             {
-                Interlocked.Increment(ref _totalCreated);
-                return new T();
+                return item;
             }
 
-            // Clear the slot to help GC and prevent reuse issues
-            _objects[index] = null;
+            // Slot was empty - create new object
+            long created = Interlocked.Increment(ref _totalCreated);
 
-            return item;
+            // Log sparingly to avoid overhead
+            if ((created & 0x7FFF) == 0) // Every 32768 creations (power of 2 for fast check)
+            {
+                var typeName = typeof(T).Name;
+                string message = $"CustomObjectPool<{typeName}> exhausted - created {created} total objects. Consider increasing pool size. Instantiated by: {_instantiator}";
+                log.Warn(message);
+            }
+
+            return new T();
         }
 
         public void Return(IEnumerable<T> listObjs)
@@ -189,48 +176,31 @@ namespace VisualHFT.Commons.Pools
 
             // Reset object state before returning to pool
             (obj as VisualHFT.Commons.Model.IResettable)?.Reset();
-            (obj as IList)?.Clear();  // Clear collections if the object implements IList
+            (obj as IList)?.Clear();
 
-            // Lock-free return using compare-and-swap
-            long currentTail, newTail, currentHead;
-            do
-            {
-                currentTail = Interlocked.Read(ref _tail);
-                currentHead = Interlocked.Read(ref _head);
-
-                // Check if pool is full
-                var currentSize = currentTail - currentHead;
-                if (currentSize >= _maxPoolSize)
-                {
-                    // Pool is full: let GC collect this instance
-                    // Note: _totalReturns is NOT incremented because object was not actually returned to pool
-                    return;
-                }
-
-                newTail = currentTail + 1;
-
-            } while (Interlocked.CompareExchange(ref _tail, newTail, currentTail) != currentTail);
-
-            // Store object in array using fast modulo (bitwise AND with mask)
+            // Always increment tail and store - circular buffer handles wraparound
+            long currentTail = Interlocked.Increment(ref _tail) - 1;
             var index = (int)(currentTail & _mask);
             _objects[index] = obj;
 
-            // Only increment counter AFTER successful return to pool
+            // Always count the return for accurate statistics
             Interlocked.Increment(ref _totalReturns);
         }
 
         public void Reset()
         {
-            // Thread-safe reset by resetting indices and clearing/resetting objects
-            var oldHead = Interlocked.Exchange(ref _head, 0);
-            var oldTail = Interlocked.Exchange(ref _tail, 0);
+            // Thread-safe reset by resetting indices and statistics
+            Interlocked.Exchange(ref _head, 0);
+            Interlocked.Exchange(ref _tail, 0);
+            Interlocked.Exchange(ref _totalReturns, 0);
 
-            // Reset all objects in the array
+            // Pre-fill pool with objects for optimal efficiency
             for (int i = 0; i < _maxPoolSize; i++)
             {
                 var obj = _objects[i];
                 if (obj != null)
                 {
+                    // Reset existing object state
                     (obj as VisualHFT.Commons.Model.IResettable)?.Reset();
                     (obj as IList)?.Clear();
                 }
@@ -262,7 +232,7 @@ namespace VisualHFT.Commons.Pools
             {
                 if (_maxPoolSize == 0) return 0;
 
-                var totalGets = Interlocked.Read(ref _totalGets);
+                var totalGets = Interlocked.Read(ref _head);
                 var totalReturns = Interlocked.Read(ref _totalReturns);
                 var outstanding = Math.Max(0, totalGets - totalReturns);
 
@@ -279,7 +249,7 @@ namespace VisualHFT.Commons.Pools
         {
             get
             {
-                var totalGets = Interlocked.Read(ref _totalGets);
+                var totalGets = Interlocked.Read(ref _head);
                 var totalCreated = Interlocked.Read(ref _totalCreated);
 
                 if (totalGets == 0) return 1.0; // No gets yet, consider efficient
@@ -293,8 +263,8 @@ namespace VisualHFT.Commons.Pools
         /// Gets the outstanding objects count (gets - returns).
         /// Positive values may indicate memory leaks or high concurrent usage.
         /// </summary>
-        public long Outstanding => Math.Max(0, Interlocked.Read(ref _totalGets) - Interlocked.Read(ref _totalReturns));
-        public long TotalGets => Interlocked.Read(ref _totalGets);
+        public long Outstanding => Math.Max(0, Interlocked.Read(ref _head) - Interlocked.Read(ref _totalReturns));
+        public long TotalGets => Interlocked.Read(ref _head); // Now derived from head pointer
         public long TotalReturns => Interlocked.Read(ref _totalReturns);
         public long TotalCreated => Interlocked.Read(ref _totalCreated);
         public int MaxPoolSize => _maxPoolSize;

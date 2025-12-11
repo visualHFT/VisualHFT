@@ -482,7 +482,37 @@ namespace VisualHFT.Commons.PluginManager
             return inputSymbol;  // return the original symbol if no normalization is found.
         }
         #endregion
+        /// <summary>
+        /// Allocation-free decimal places detection from Span of BookItems.
+        /// </summary>
+        protected int RecognizeDecimalPlacesFromSpan(ReadOnlySpan<BookItem> items)
+        {
+            int maxDecimalPlaces = 0;
 
+            foreach (var item in items)
+            {
+                if (!item.Size.HasValue)
+                    continue;
+
+                decimal value = (decimal)item.Size.Value;
+                int decimalPlaces = GetDecimalPlaces(value);
+
+                if (decimalPlaces > maxDecimalPlaces)
+                    maxDecimalPlaces = decimalPlaces;
+            }
+
+            return Math.Max(1, maxDecimalPlaces);
+        }
+        /// <summary>
+        /// Allocation-free decimal places calculation using bitwise operations.
+        /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        private static int GetDecimalPlaces(decimal value)
+        {
+            // Extract scale from decimal bits (avoiding string allocation)
+            int[] bits = decimal.GetBits(value);
+            return (bits[3] >> 16) & 0x00FF;
+        }
         protected int RecognizeDecimalPlacesAutomatically(IEnumerable<decimal> values)
         {
             int maxDecimalPlaces = 0;

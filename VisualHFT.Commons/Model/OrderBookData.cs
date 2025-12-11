@@ -22,8 +22,13 @@ namespace VisualHFT.Model
             public WriteLockReleaser(ReaderWriterLockSlim rwLock) => _lock = rwLock;
             public void Dispose() => _lock.ExitWriteLock();
         }
-
         private readonly ReaderWriterLockSlim _rwLock = new ReaderWriterLockSlim(LockRecursionPolicy.SupportsRecursion);
+        /// <summary>
+        /// Exposes the internal lock for advanced scenarios requiring coordinated locking across multiple OrderBooks.
+        /// Use with caution - prefer EnterReadLock/EnterWriteLock for normal operations.
+        /// </summary>
+        public object Lock => _rwLock;
+
         /// <summary>
         /// Enters a read lock. Use in 'using' statement for automatic cleanup.
         /// </summary>
