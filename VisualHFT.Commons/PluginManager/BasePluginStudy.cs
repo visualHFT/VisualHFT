@@ -236,7 +236,7 @@ namespace VisualHFT.Commons.PluginManager
                     Value = 0,
                     Timestamp = HelperTimeProvider.Now,
                     ValueColor = "Red",
-                    ValueFormatted = "Err",
+                    HasError = true,
                     Tooltip = obj.Exception.Message
                 });
 
@@ -252,10 +252,11 @@ namespace VisualHFT.Commons.PluginManager
                     //handle status changed
                     if (newStatus == ePluginStatus.STOPPED || newStatus == ePluginStatus.STOPPED_FAILED)
                     {
-                        //send empty model
+                        bool isError = newStatus == ePluginStatus.STOPPED_FAILED;
                         AddCalculation(new BaseStudyModel()
                         {
-                            ValueFormatted = (newStatus == ePluginStatus.STOPPED ? "..." : "Err"),
+                            HasError = isError,
+                            IsStale = !isError,
                             Timestamp = HelperTimeProvider.Now,
                             Tooltip = "Provider status: " + newStatus.ToString(),
                             ValueColor = "Red"
@@ -272,7 +273,7 @@ namespace VisualHFT.Commons.PluginManager
                 // Send "stale data" indicator to UI
                 AddCalculation(new BaseStudyModel()
                 {
-                    ValueFormatted = "...",
+                    IsStale = true,
                     Timestamp = HelperTimeProvider.Now,
                     Tooltip = $"{e.ProviderName} is stale - no data for 30+ seconds",
                     ValueColor = "Orange", // Different from "Red" (error)

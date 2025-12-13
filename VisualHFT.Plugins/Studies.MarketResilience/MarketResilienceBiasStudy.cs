@@ -159,30 +159,38 @@ namespace VisualHFT.Studies
             //Aggregation: last
             var existing = dataCollection[^1]; // Get the last item in the collection
             existing.Value = newItem.Value;
-            existing.ValueFormatted = newItem.ValueFormatted;
+            existing.Format = newItem.Format;
             existing.MarketMidPrice = newItem.MarketMidPrice;
 
             base.onDataAggregation(dataCollection, newItem, lastItemAggregationCount);
         }
 
 
+        private static readonly Func<decimal, string> BiasFormatter = FormatBias;
+
+        private static string FormatBias(decimal value)
+        {
+            return value switch
+            {
+                1 => "↑",    // Bullish
+                -1 => "↓",   // Bearish
+                _ => "-"     // Neutral/Unknown
+            };
+        }
+
+        // Then in DoCalculationAndSend():
         protected void DoCalculationAndSend()
         {
             if (Status != VisualHFT.PluginManager.ePluginStatus.STARTED) return;
 
-            // Trigger any events or updates based on the new T2O ratio
             eMarketBias _valueBias = _mrBiasCalc.CurrentMarketBias;
-            string _valueFormatted = "-"; //unknown
-            string _valueColor = "White";
-
-
-            _valueFormatted = _valueBias == eMarketBias.Bullish ? "↑" : (_valueBias == eMarketBias.Bearish ? "↓" : "-");
-            _valueColor = _valueBias == eMarketBias.Bullish ? "Green" : (_valueBias == eMarketBias.Bearish ? "Red" : "White");
+            string _valueColor = _valueBias == eMarketBias.Bullish ? "Green"
+                               : (_valueBias == eMarketBias.Bearish ? "Red" : "White");
 
             var newItem = new BaseStudyModel
             {
                 Value = _valueBias == eMarketBias.Bullish ? 1 : (_valueBias == eMarketBias.Bearish ? -1 : 0),
-                ValueFormatted = _valueFormatted,
+                CustomFormatter = BiasFormatter,  // ✅ Use CustomFormatter instead
                 ValueColor = _valueColor,
                 MarketMidPrice = _mrBiasCalc.MidMarketPrice,
                 Timestamp = HelperTimeProvider.Now

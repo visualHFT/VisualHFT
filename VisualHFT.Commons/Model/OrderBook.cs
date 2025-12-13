@@ -444,11 +444,12 @@ namespace VisualHFT.Model
                 {
                     foreach (var askItem in asks)
                     {
-                        if (askItem is not { Price: not null, Size: not null }) continue;
-
-                        var pooledItem = BookItemPool.Get();
-                        pooledItem.CopyFrom(askItem);
-                        _data.Asks.Add(pooledItem);
+                        if (askItem != null && askItem.Price.HasValue && askItem.Size.HasValue)
+                        {
+                            var pooledItem = BookItemPool.Get();
+                            pooledItem.CopyFrom(askItem);
+                            _data.Asks.Add(pooledItem);
+                        }
                     }
                 }
 
@@ -457,10 +458,12 @@ namespace VisualHFT.Model
                 {
                     foreach (var bidItem in bids)
                     {
-                        if (bidItem is not { Price: not null, Size: not null }) continue;
-                        var pooledItem = BookItemPool.Get();
-                        pooledItem.CopyFrom(bidItem);
-                        _data.Bids.Add(pooledItem);
+                        if (bidItem != null && bidItem.Price.HasValue && bidItem.Size.HasValue)
+                        {
+                            var pooledItem = BookItemPool.Get();
+                            pooledItem.CopyFrom(bidItem);
+                            _data.Bids.Add(pooledItem);
+                        }
                     }
                 }
 
@@ -471,6 +474,125 @@ namespace VisualHFT.Model
             // Calculate metrics outside the lock for better performance
             CalculateMetrics();
         }
+        /// <summary>
+        /// Computes the delta needed to transform THIS order book into <paramref name="other"/>,
+        /// emitting one <see cref="DeltaBookItem"/> per changed price level (absolute size; 0 = delete).
+        /// Performance: O(N+M) per side; allocation-free (uses pooled DeltaBookItem).
+        /// IMPORTANT: <paramref name="onDelta"/> MUST consume the item synchronously and copy its data.
+        /// This method RETURNS the pooled item immediately after invoking the callback.
+        /// </summary>
+        /// <param name="other">The newer snapshot for the same venue/symbol.</param>
+        /// <param name="onDelta">
+        /// Callback that receives one pooled DeltaBookItem per change. Do not retain the reference.
+        /// Typical usage: obLocal.AddOrUpdateLevel(delta);  // which copies fields synchronously
+        /// </param>
+        public void ComputeDeltaAgainst(OrderBook other, Action<DeltaBookItem> onDelta)
+        {
+            if (other == null) throw new ArgumentNullException(nameof(other));
+            if (onDelta == null) throw new ArgumentNullException(nameof(onDelta));
+
+            // Use the existing RAII-style read locks from OrderBookData
+            using (_data.EnterReadLock())
+            {
+                using (other._data.EnterReadLock())
+                {
+                    DiffBothSides_NoAlloc_(this, other, onDelta);
+                }
+            }
+        }
+        private static void DiffBothSides_NoAlloc_(OrderBook oldBook, OrderBook newBook, Action<DeltaBookItem> emit)
+        {
+            // Access underlying storage directly to avoid MaxDepth filtering and extra wrappers.
+            var oldBids = oldBook._data.Bids;
+            var newBids = newBook._data.Bids;
+            var oldAsks = oldBook._data.Asks;
+            var newAsks = newBook._data.Asks;
+
+            DiffSide_NoAlloc_(oldBids, newBids, /*isBid*/ true, emit);
+            DiffSide_NoAlloc_(oldAsks, newAsks, /*isBid*/ false, emit);
+        }
+
+        private static void DiffSide_NoAlloc_(
+            CachedCollection<BookItem> oldSide,
+            CachedCollection<BookItem> newSide,
+            bool isBid,
+            Action<DeltaBookItem> emit)
+        {
+            int i = 0, j = 0;
+            int oldCount = oldSide == null ? 0 : oldSide.Count();
+            int newCount = newSide == null ? 0 : newSide.Count();
+
+            // Local function to emit a pooled delta and immediately return it to the pool.
+            static void Emit(bool isBidL, double price, double size, Action<DeltaBookItem> sink)
+            {
+                var d = DeltaBookItemPool.Get();
+                d.IsBid = isBidL;
+                d.Price = price;
+                d.Size = size;
+                d.LocalTimeStamp = DateTime.UtcNow; // caller may overwrite if needed
+                d.ServerTimeStamp = d.LocalTimeStamp;
+                sink(d);
+                DeltaBookItemPool.Return(d); // safe because consumer must copy synchronously
+            }
+
+            // Merge walk
+            while (i < oldCount && j < newCount)
+            {
+                var o = oldSide[i];
+                var n = newSide[j];
+
+                // Assuming exact price equality as elsewhere in the codebase (AddOrUpdateLevel uses ==).
+                double op = o.Price.GetValueOrDefault();
+                double np = n.Price.GetValueOrDefault();
+
+                if (op == np)
+                {
+                    // Same price level: update only if size changed
+                    double os = o.Size.GetValueOrDefault();
+                    double ns = n.Size.GetValueOrDefault();
+                    if (os != ns)
+                        Emit(isBid, np, ns, emit);
+
+                    i++; j++;
+                }
+                else
+                {
+                    // Determine ordering based on side sort (bids: desc, asks: asc)
+                    bool oldComesFirst = isBid ? (op > np) : (op < np);
+
+                    if (oldComesFirst)
+                    {
+                        // Level present in old but not (at this position) in new => removed (size -> 0)
+                        Emit(isBid, op, 0.0, emit);
+                        i++;
+                    }
+                    else
+                    {
+                        // Level present in new but not in old => added (size -> ns)
+                        Emit(isBid, np, n.Size.GetValueOrDefault(), emit);
+                        j++;
+                    }
+                }
+            }
+
+            // Any remaining old levels are deletions
+            while (i < oldCount)
+            {
+                var o = oldSide[i++];
+                double op = o.Price.GetValueOrDefault();
+                if (op != 0.0) Emit(isBid, op, 0.0, emit);
+            }
+
+            // Any remaining new levels are additions
+            while (j < newCount)
+            {
+                var n = newSide[j++];
+                double np = n.Price.GetValueOrDefault();
+                if (np != 0.0) Emit(isBid, np, n.Size.GetValueOrDefault(), emit);
+            }
+        }
+
+
 
         public void Clear()
         {
@@ -756,139 +878,6 @@ namespace VisualHFT.Model
 
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         private double Unscale(ulong scaled) => scaled / (double)_volumeScale;
-
-
-        /// <summary>
-        /// Computes the delta needed to transform THIS order book into <paramref name="other"/>,
-        /// emitting one <see cref="DeltaBookItem"/> per changed price level (absolute size; 0 = delete).
-        /// Performance: O(N+M) per side; allocation-free (uses pooled DeltaBookItem).
-        /// IMPORTANT: <paramref name="onDelta"/> MUST consume the item synchronously and copy its data.
-        /// This method RETURNS the pooled item immediately after invoking the callback.
-        /// </summary>
-        /// <param name="other">The newer snapshot for the same venue/symbol.</param>
-        /// <param name="onDelta">
-        /// Callback that receives one pooled DeltaBookItem per change. Do not retain the reference.
-        /// Typical usage: obLocal.AddOrUpdateLevel(delta);  // which copies fields synchronously
-        /// </param>
-        public void ComputeDeltaAgainst(OrderBook other, Action<DeltaBookItem> onDelta)
-        {
-            if (other == null) throw new ArgumentNullException(nameof(other));
-            if (onDelta == null) throw new ArgumentNullException(nameof(onDelta));
-
-            // Lock both books using read locks in deterministic order to avoid deadlocks.
-            // Use object identity hash to establish consistent ordering.
-            int ha = RuntimeHelpers.GetHashCode(_data);
-            int hb = RuntimeHelpers.GetHashCode(other._data);
-
-            if (ha <= hb)
-            {
-                using (_data.EnterReadLock())
-                using (other._data.EnterReadLock())
-                {
-                    DiffBothSides_NoAlloc_(this, other, onDelta);
-                }
-            }
-            else
-            {
-                using (other._data.EnterReadLock())
-                using (_data.EnterReadLock())
-                {
-                    DiffBothSides_NoAlloc_(this, other, onDelta);
-                }
-            }
-        }
-        private static void DiffBothSides_NoAlloc_(OrderBook oldBook, OrderBook newBook, Action<DeltaBookItem> emit)
-        {
-            // Access underlying storage directly to avoid MaxDepth filtering and extra wrappers.
-            var oldBids = oldBook._data.Bids;
-            var newBids = newBook._data.Bids;
-            var oldAsks = oldBook._data.Asks;
-            var newAsks = newBook._data.Asks;
-
-            DiffSide_NoAlloc_(oldBids, newBids, /*isBid*/ true, emit);
-            DiffSide_NoAlloc_(oldAsks, newAsks, /*isBid*/ false, emit);
-        }
-        private static void DiffSide_NoAlloc_(
-            CachedCollection<BookItem> oldSide,
-            CachedCollection<BookItem> newSide,
-            bool isBid,
-            Action<DeltaBookItem> emit)
-        {
-            int i = 0, j = 0;
-            int oldCount = oldSide == null ? 0 : oldSide.Count();
-            int newCount = newSide == null ? 0 : newSide.Count();
-
-            // Local function to emit a pooled delta and immediately return it to the pool.
-            static void Emit(bool isBidL, double price, double size, Action<DeltaBookItem> sink)
-            {
-                var d = DeltaBookItemPool.Get();
-                d.IsBid = isBidL;
-                d.Price = price;
-                d.Size = size;
-                d.LocalTimeStamp = DateTime.UtcNow; // caller may overwrite if needed
-                d.ServerTimeStamp = d.LocalTimeStamp;
-                sink(d);
-                DeltaBookItemPool.Return(d); // safe because consumer must copy synchronously
-            }
-
-            // Merge walk
-            while (i < oldCount && j < newCount)
-            {
-                var o = oldSide[i];
-                var n = newSide[j];
-
-                // Assuming exact price equality as elsewhere in the codebase (AddOrUpdateLevel uses ==).
-                double op = o.Price.GetValueOrDefault();
-                double np = n.Price.GetValueOrDefault();
-
-                if (op == np)
-                {
-                    // Same price level: update only if size changed
-                    double os = o.Size.GetValueOrDefault();
-                    double ns = n.Size.GetValueOrDefault();
-                    if (os != ns)
-                        Emit(isBid, np, ns, emit);
-
-                    i++; j++;
-                }
-                else
-                {
-                    // Determine ordering based on side sort (bids: desc, asks: asc)
-                    bool oldComesFirst = isBid ? (op > np) : (op < np);
-
-                    if (oldComesFirst)
-                    {
-                        // Level present in old but not (at this position) in new => removed (size -> 0)
-                        Emit(isBid, op, 0.0, emit);
-                        i++;
-                    }
-                    else
-                    {
-                        // Level present in new but not in old => added (size -> ns)
-                        Emit(isBid, np, n.Size.GetValueOrDefault(), emit);
-                        j++;
-                    }
-                }
-            }
-
-            // Any remaining old levels are deletions
-            while (i < oldCount)
-            {
-                var o = oldSide[i++];
-                double op = o.Price.GetValueOrDefault();
-                if (op != 0.0) Emit(isBid, op, 0.0, emit);
-            }
-
-            // Any remaining new levels are additions
-            while (j < newCount)
-            {
-                var n = newSide[j++];
-                double np = n.Price.GetValueOrDefault();
-                if (np != 0.0) Emit(isBid, np, n.Size.GetValueOrDefault(), emit);
-            }
-        }
-
-
 
         private void ThrowIfDisposed()
         {

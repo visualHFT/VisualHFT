@@ -18,6 +18,7 @@ namespace VisualHFT.Studies
 {
     public class MarketResilienceStudy : BasePluginStudy
     {
+        private const string ValueFormat = "N1";
         private bool _disposed = false; // to track whether the object has been disposed
         private PlugInSettings _settings;
 
@@ -155,7 +156,7 @@ namespace VisualHFT.Studies
             //we want to average the aggregations
             var existing = dataCollection[^1]; // Get the last item in the collection
             existing.Value = ((existing.Value * (lastItemAggregationCount - 1)) + newItem.Value) / lastItemAggregationCount;
-            existing.ValueFormatted = existing.Value.ToString("N1");
+            existing.Format = ValueFormat;
             existing.MarketMidPrice = newItem.MarketMidPrice;
 
             base.onDataAggregation(dataCollection, newItem, lastItemAggregationCount);
@@ -169,7 +170,7 @@ namespace VisualHFT.Studies
             var newItem = new BaseStudyModel
             {
                 Value = mrCalc.CurrentMRScore,
-                ValueFormatted = mrCalc.CurrentMRScore.ToString("N1"),
+                Format = ValueFormat,
                 MarketMidPrice = (decimal)mrCalc.MidMarketPrice,
                 Timestamp = HelperTimeProvider.Now
             };

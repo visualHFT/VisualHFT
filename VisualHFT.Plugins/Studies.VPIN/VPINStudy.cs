@@ -24,6 +24,10 @@ namespace VisualHFT.Studies
     /// </summary>
     public class VPINStudy : BasePluginStudy
     {
+        private const string ValueFormat = "N1";
+        private const string colorGreen = "Green";
+        private const string colorWhite = "White";
+
         private bool _disposed = false; // to track whether the object has been disposed
         private PlugInSettings _settings;
 
@@ -163,7 +167,7 @@ namespace VisualHFT.Studies
         private void DoCalculation(bool isNewBucket)
         {
             if (Status != VisualHFT.PluginManager.ePluginStatus.STARTED) return;
-            string valueColor = isNewBucket ? "Green" : "White";
+            string valueColor = isNewBucket ? colorGreen : colorWhite;
 
             decimal vpin = 0;
             if ((_currentBuyVolume + _currentSellVolume) > 0)
@@ -172,7 +176,7 @@ namespace VisualHFT.Studies
             // Add to rolling window and remove oldest if size exceeded
             var newItem = new BaseStudyModel();
             newItem.Value = vpin;
-            newItem.ValueFormatted = vpin.ToString("N1");
+            newItem.Format = ValueFormat;
             newItem.Timestamp = HelperTimeProvider.Now;
             newItem.MarketMidPrice = _lastMarketMidPrice;
             newItem.ValueColor = valueColor;
@@ -201,7 +205,7 @@ namespace VisualHFT.Studies
             //Aggregation: last
             var existing = dataCollection[^1]; // Get the last item in the collection
             existing.Value = newItem.Value;
-            existing.ValueFormatted = newItem.ValueFormatted;
+            existing.Format = newItem.Format;
             existing.MarketMidPrice = newItem.MarketMidPrice;
 
             base.onDataAggregation(dataCollection, newItem, lastItemAggregationCount);
