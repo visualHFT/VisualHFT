@@ -56,7 +56,6 @@ namespace VisualHFT.ViewModel
             Title = _study.TileTitle;
             Tooltip = _study.TileToolTip;
 
-            _localModel.ValueFormatted = ".";
             _localModel.Tooltip = "Waiting for data...";
 
             _study.OnCalculated += _study_OnCalculated;
@@ -94,7 +93,6 @@ namespace VisualHFT.ViewModel
             Title = _multiStudy.TileTitle;
             Tooltip = _multiStudy.TileToolTip;
 
-            _localModel.ValueFormatted = ".";
             _localModel.Tooltip = "Waiting for data...";
 
             OpenSettingsCommand = new RelayCommand<vmTile>(OpenSettings);
@@ -159,9 +157,10 @@ namespace VisualHFT.ViewModel
                 _localModel.copyFrom(e);
             }
 
-            if (_localModel.ValueFormatted == ".")
+
+            if (!_localModel.HasData && !_localModel.HasError && !_localModel.IsStale)
                 _localModel.Tooltip = "Waiting for data...";
-            else if (!string.IsNullOrEmpty(_localModel.Tooltip))
+            else if (!string.IsNullOrEmpty(e.Tooltip))
                 _localModel.Tooltip = e.Tooltip;
             else
                 _localModel.Tooltip = null;
@@ -172,16 +171,16 @@ namespace VisualHFT.ViewModel
 
         ~vmTile() { Dispose(false); }
 
+        // In uiUpdaterAction - format on demand:
         private void uiUpdaterAction()
         {
             if (_localModel == null || !_DATA_AVAILABLE)
                 return;
             lock (_lock)
             {
-                Value = _localModel.ValueFormatted;
+                Value = GetDisplayValue(_localModel);
                 ValueTooltip = _localModel.Tooltip;
 
-                //update color if set or has changed
                 if (_localModel.ValueColor != null)
                 {
                     if (_valueColor == null || _valueColor.ToString() != _localModel.ValueColor)
@@ -191,6 +190,33 @@ namespace VisualHFT.ViewModel
                 _DATA_AVAILABLE = true;
             }
         }
+        /// <summary>
+        /// Gets the display value based on model state.
+        /// Formatting happens here (UI layer) only when needed.
+        /// </summary>
+        private static string GetDisplayValue(BaseStudyModel model)
+        {
+            // Priority: Error > Stale > No Data > Normal
+            if (model.HasError)
+                return "Err";
+
+            if (model.IsStale)
+                return "...";
+
+            if (!model.HasData)
+                return ".";
+
+            // Normal case: format the value
+            if (model.CustomFormatter != null)
+                return model.CustomFormatter(model.Value);
+
+            if (string.IsNullOrEmpty(model.Format))
+                return model.Value.ToString();
+
+            return model.Value.ToString(model.Format);
+        }
+
+
         public void UpdateAllUI()
         {
             _DATA_AVAILABLE = true;
@@ -341,7 +367,31 @@ namespace VisualHFT.ViewModel
                                     }
                                 }
                                 ChildTiles.Clear();
+                                ChildTiles = null;
                             }
+
+                            // Dispose the multi-study itself
+                            foreach (var study in _multiStudy.Studies)
+                            {
+                                try
+                                {
+                                    study.StopAsync();
+                                    study.Dispose();
+                                }
+                                catch (Exception ex)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"Error disposing study: {ex.Message}");
+                                }
+                            }
+                            _multiStudy.Dispose();
+                            _multiStudy = null;
+                        }
+
+                        // Dispose plugin
+                        if (_plugin != null)
+                        {
+                            // Note: Plugin disposal handled by PluginManager
+                            _plugin = null;
                         }
 
                         // Dispose UI updater

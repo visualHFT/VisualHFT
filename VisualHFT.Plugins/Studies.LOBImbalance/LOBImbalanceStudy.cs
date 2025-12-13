@@ -16,6 +16,8 @@ namespace VisualHFT.Studies
 {
     public class LOBImbalanceStudy : BasePluginStudy
     {
+        private const string ValueFormat = "N1";
+
         private bool _disposed = false; // to track whether the object has been disposed
         private PlugInSettings _settings;
 
@@ -91,7 +93,7 @@ namespace VisualHFT.Studies
             if (Status != VisualHFT.PluginManager.ePluginStatus.STARTED) return;
             var newItem = new BaseStudyModel();
             newItem.Value = (decimal)_lobImbalance;
-            newItem.ValueFormatted = _lobImbalance.ToString("N1");
+            newItem.Format = ValueFormat;
             newItem.Timestamp = HelperTimeProvider.Now;
             newItem.MarketMidPrice = (decimal)_lobMidPrice;
 
@@ -113,7 +115,7 @@ namespace VisualHFT.Studies
             //Aggregation: last
             var existing = dataCollection[^1]; // Get the last item in the collection
             existing.Value = newItem.Value;
-            existing.ValueFormatted = newItem.ValueFormatted;
+            existing.Format = newItem.Format;
             existing.MarketMidPrice = newItem.MarketMidPrice;
 
             base.onDataAggregation(dataCollection, newItem, lastItemAggregationCount);
