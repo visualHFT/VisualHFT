@@ -85,7 +85,7 @@ namespace VisualHFT.Commons.Pools
     public static class BookItemL2Pool
     {
         // Pool size configuration
-        private const int POOL_SIZE = 5_000_000;
+        private const int POOL_SIZE = 100_000;
 
         // Thread-safe: CustomObjectPool<T> uses Interlocked operations internally
         private static readonly CustomObjectPool<BookItem> _instance =
@@ -240,7 +240,7 @@ namespace VisualHFT.Commons.Pools
 
         public bool IsHealthy => CurrentUtilization < 0.9999 && Outstanding >= 0;
         public bool IsCritical => CurrentUtilization > 0.9;
-        public bool HasLeaks => Outstanding > PoolSize * 1.5;
+        public bool HasLeaks => Outstanding > PoolSize * 0.1;
 
         // Extended properties - default implementations for basic pool
         public long ExtendedItemsReturned => 0;

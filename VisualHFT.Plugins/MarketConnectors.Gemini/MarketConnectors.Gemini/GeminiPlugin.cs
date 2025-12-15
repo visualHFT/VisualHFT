@@ -218,6 +218,12 @@ namespace MarketConnectors.Gemini
                 });
                 _socketDisconnectionSubscription = _socketClient.DisconnectionHappened.Subscribe(disconnected =>
                 {
+                    log.Warn($"WebSocket disconnected. Type: {disconnected.Type}, " +
+                                 $"CloseStatus: {disconnected.CloseStatus}, " +
+                                 $"Description: '{disconnected.CloseStatusDescription ?? "(none)"}', " +
+                                 $"Exception: {disconnected.Exception?.Message ?? "(none)"}");
+
+
                     Status = ePluginStatus.STOPPED;
                     if (isReconnecting)
                         return;
@@ -229,7 +235,11 @@ namespace MarketConnectors.Gemini
                     }
                     else
                     {
-                        var _error = $"Will reconnect. Unhandled error while receiving delta market data.";
+                        var reason = !string.IsNullOrEmpty(disconnected.CloseStatusDescription)
+                            ? disconnected.CloseStatusDescription
+                            : $"Server disconnected (Type: {disconnected.Type})";
+
+                        var _error = $"Will reconnect. {reason}";
                         LogException(disconnected?.Exception, _error);
                         if (!isReconnecting)
                         {
