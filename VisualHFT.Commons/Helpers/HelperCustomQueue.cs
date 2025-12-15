@@ -1,8 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using VisualHFT.Commons.Pools;
-using VisualHFT.Helpers;
 
 public class HelperCustomQueue<T> : IDisposable
 {
@@ -37,7 +35,9 @@ public class HelperCustomQueue<T> : IDisposable
     private long _lastReportTicks = DateTime.UtcNow.Ticks;
     private long _lastReportAdded = 0;
     private long _lastReportProcessed = 0;
-    private static readonly long REPORT_INTERVAL_TICKS = TimeSpan.FromSeconds(5).Ticks; // Report every 5 seconds
+
+    private long _lastReportTimestamp = Stopwatch.GetTimestamp();
+    private static readonly long REPORT_INTERVAL_TICKS = Stopwatch.Frequency * 5; // 5 seconds
 
 
     // Public read-only properties for monitoring
@@ -113,28 +113,34 @@ public class HelperCustomQueue<T> : IDisposable
 
     public void Add(T item)
     {
-        if (_disposed || _queue.IsAddingCompleted)
+        if (Volatile.Read(ref _disposed) || _queue.IsAddingCompleted)
             return;
         if (item == null)
             return;
+        
         _queue.Add(item);
+        
         if (_monitorHealth)
             Interlocked.Increment(ref _totalMessagesAdded); // Ultra-fast atomic increment
-        _resetEvent.Set();
 
+        if (_queue.Count == 1)
+            _resetEvent.Set();
         // Periodic reporting (minimal overhead check)
         if (_monitorHealth)
             CheckAndReportPerformance();
     }
 
-    public void PauseConsumer() => _isPaused = true;
+    // Change field declarations (no need to change to volatile keyword)
+    // Instead, use Volatile.Read/Write at access points
+
+    public void PauseConsumer() => Volatile.Write(ref _isPaused, true);
 
     public void ResumeConsumer()
     {
-        if (_disposed)
+        if (Volatile.Read(ref _disposed))
             return;
 
-        _isPaused = false;
+        Volatile.Write(ref _isPaused, false);
         _resetEvent.Set();
     }
 
@@ -187,61 +193,72 @@ public class HelperCustomQueue<T> : IDisposable
 
         try
         {
-            while (_isRunning && !_disposed)
+            while (Volatile.Read(ref _isRunning) && !Volatile.Read(ref _disposed))
             {
-                _resetEvent.Wait(); // no token — no per-wait allocation
-                _resetEvent.Reset();
-
-                if (_isPaused || _disposed)
-                    continue;
-
+                // Drain all available items FIRST (batch processing)
+                int processedCount = 0;
                 while (_queue.TryTake(out var item))
                 {
-                    if (_disposed || _isPaused)
+                    if (Volatile.Read(ref _disposed) || Volatile.Read(ref _isPaused))
                         break;
 
                     try
                     {
-                        sw.Restart();
+                        if (_monitorHealth) sw.Restart();
                         _actionOnRead(item);
-                        sw.Stop();
-
-                        // Ultra-fast performance tracking
                         if (_monitorHealth)
                         {
+                            sw.Stop();
                             Interlocked.Increment(ref _totalMessagesProcessed);
                             Interlocked.Add(ref _totalProcessingTimeTicks, sw.ElapsedTicks);
                         }
+                        processedCount++;
                     }
                     catch (Exception ex)
                     {
                         _onError?.Invoke(ex);
-                        // Continue processing other items even if one fails
+                    }
+                }
+
+                // Only wait if we processed nothing (queue was empty)
+                if (processedCount == 0 && !Volatile.Read(ref _disposed))
+                {
+                    // Use SpinWait for short waits, then fall back to event
+                    var spinner = new SpinWait();
+                    while (_queue.Count == 0 && !spinner.NextSpinWillYield)
+                    {
+                        spinner.SpinOnce();
+                    }
+
+                    if (_queue.Count == 0)
+                    {
+                        _resetEvent.Reset();
+                        // Double-check after reset
+                        if (_queue.Count == 0 && !Volatile.Read(ref _disposed))
+                        {
+                            _resetEvent.Wait(TimeSpan.FromMilliseconds(1));
+                        }
                     }
                 }
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // This should only catch exceptions from the consumer loop itself, not from item processing
             _onError?.Invoke(ex);
         }
     }
 
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void CheckAndReportPerformance()
     {
-        var currentTicks = DateTime.UtcNow.Ticks;
-        var lastReport = _lastReportTicks;
+        var currentTimestamp = Stopwatch.GetTimestamp();
+        var lastReport = Volatile.Read(ref _lastReportTimestamp);
 
-        // Only check every 5 seconds to minimize overhead
-        if (currentTicks - lastReport > REPORT_INTERVAL_TICKS)
+        if (currentTimestamp - lastReport > REPORT_INTERVAL_TICKS)
         {
-            // Try to atomically update the last report time
-            if (Interlocked.CompareExchange(ref _lastReportTicks, currentTicks, lastReport) == lastReport)
+            if (Interlocked.CompareExchange(ref _lastReportTimestamp, currentTimestamp, lastReport) == lastReport)
             {
-                ReportPerformanceMetrics(currentTicks, lastReport);
+                ReportPerformanceMetrics(currentTimestamp, lastReport);
             }
         }
     }
