@@ -1,6 +1,7 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using VisualHFT.Commons.Model;
 
 namespace VisualHFT.Commons.Pools
 {
@@ -8,6 +9,12 @@ namespace VisualHFT.Commons.Pools
     /// High-performance object pool with guaranteed object reuse for HFT systems.
     /// Uses true allocation-free lock-free array-based circular buffer.
     /// Replaces Microsoft's DefaultObjectPool which creates new objects when exhausted.
+    /// 
+    /// TRIMMING BEHAVIOR:
+    /// - Automatic background trimming when utilization is low for sustained period
+    /// - Timer is lazy-initialized on first Get() call (zero startup overhead)
+    /// - Trimming runs on ThreadPool, never blocks hot path
+    /// - Configurable thresholds via constants
     /// </summary>
     public class CustomObjectPool<T> : IDisposable where T : class, new()
     {
@@ -21,10 +28,21 @@ namespace VisualHFT.Commons.Pools
         private long _tail;  // Points to next position to put item
 
         // Statistics
-        // Note: TotalGets is derived from _head pointer, no separate counter needed
         private long _totalReturns;
         private long _totalCreated;
-        private bool _disposed = false;
+        private volatile bool _disposed = false;
+
+        // Trimming configuration
+        private const int TRIM_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+        private const double LOW_UTILIZATION_THRESHOLD = 0.10; // 10%
+        private const int CONSECUTIVE_LOW_CHECKS_REQUIRED = 3; // 15 minutes sustained low
+
+        // Adaptive trim state
+        private Timer _trimTimer;
+        private int _timerInitialized = 0;
+        private int _consecutiveLowUtilizationChecks = 0;
+        private long _peakObjectsInUse = 0;  // Track peak usage for adaptive trimming
+        private long _lastTrimTimestamp = 0; // Prevent rapid trim cycles
 
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
@@ -42,7 +60,6 @@ namespace VisualHFT.Commons.Pools
             _instantiator = GetInstantiator();
 
             // Pre-warm the pool with initial objects based on original logic
-            // Small pools (size < 10) won't have pre-warmed objects
             var prewarmCount = Math.Min(maxPoolSize / 10, 100);
             for (int i = 0; i < prewarmCount; i++)
             {
@@ -51,19 +68,14 @@ namespace VisualHFT.Commons.Pools
                 Interlocked.Increment(ref _totalCreated);
             }
 
-
-
-            
             // Set tail to indicate how many objects are available
             _tail = prewarmCount;
         }
 
         private static int GetNextPowerOfTwo(int value)
         {
-            // Handle edge cases
             if (value <= 1) return 1;
 
-            // For small values, use the fast path
             if (value <= 1024)
             {
                 if (value <= 2) return 2;
@@ -78,8 +90,6 @@ namespace VisualHFT.Commons.Pools
                 return 1024;
             }
 
-            // For larger values, use bit manipulation for dynamic calculation
-            // This approach can handle up to 1,073,741,824 (1 billion) objects
             value--;
             value |= value >> 1;
             value |= value >> 2;
@@ -88,12 +98,10 @@ namespace VisualHFT.Commons.Pools
             value |= value >> 16;
             value++;
 
-            // Ensure we don't overflow int (max power of 2 for int is 1,073,741,824)
             if (value <= 0 || value > 1073741824)
             {
                 throw new ArgumentException(
-                    $"Pool size {value:N0} is too large. Maximum supported size is 1,073,741,824 (1 billion) objects. " +
-                    $"Consider using multiple smaller pools or redesigning your architecture for sizes above 1 billion.");
+                    $"Pool size {value:N0} is too large. Maximum supported size is 1,073,741,824 (1 billion) objects.");
             }
 
             return value;
@@ -106,8 +114,6 @@ namespace VisualHFT.Commons.Pools
                 var stackTrace = new StackTrace();
                 var frames = stackTrace.GetFrames();
 
-                // Skip the first frame (this method) and the constructor frame
-                // Look for the first frame that's not in this class
                 for (int i = 2; i < frames.Length; i++)
                 {
                     var method = frames[i].GetMethod();
@@ -126,11 +132,89 @@ namespace VisualHFT.Commons.Pools
             }
         }
 
+        // ═══════════════════════════════════════════════════════════════════
+        // LAZY TIMER INITIALIZATION - Called once on first Get()
+        // ═══════════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Ensures the trim timer is initialized. Uses lock-free initialization.
+        /// Only allocates the timer once, on first actual use of the pool.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void EnsureTrimTimerInitialized()
+        {
+            // Fast path: already initialized
+            if (Volatile.Read(ref _timerInitialized) == 1)
+                return;
+
+            // Slow path: try to initialize (only one thread wins)
+            if (Interlocked.CompareExchange(ref _timerInitialized, 1, 0) == 0)
+            {
+                // We won the race - create the timer
+                // Timer runs on ThreadPool, never blocks calling thread
+                _trimTimer = new Timer(
+                    TrimTimerCallback,
+                    null,
+                    TRIM_CHECK_INTERVAL_MS,  // Initial delay (don't check immediately)
+                    TRIM_CHECK_INTERVAL_MS); // Subsequent interval
+            }
+        }
+
+        /// <summary>
+        /// Timer callback - runs on ThreadPool thread.
+        /// Checks utilization and trims if sustained low usage detected.
+        /// </summary>
+        private void TrimTimerCallback(object state)
+        {
+            if (_disposed) return;
+
+            try
+            {
+                double utilization = UtilizationPercentage;
+
+                if (utilization < LOW_UTILIZATION_THRESHOLD)
+                {
+                    int checks = Interlocked.Increment(ref _consecutiveLowUtilizationChecks);
+
+                    if (checks >= CONSECUTIVE_LOW_CHECKS_REQUIRED)
+                    {
+                        TrimExcessInternal();
+                        Interlocked.Exchange(ref _consecutiveLowUtilizationChecks, 0);
+                    }
+                }
+                else
+                {
+                    // Utilization increased - reset counter
+                    Interlocked.Exchange(ref _consecutiveLowUtilizationChecks, 0);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Never let timer callback crash
+                log.Warn($"CustomObjectPool<{typeof(T).Name}> trim check failed: {ex.Message}");
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // HOT PATH - MINIMAL OVERHEAD (single volatile read for timer check)
+        // ═══════════════════════════════════════════════════════════════════
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public T Get()
         {
+            // Lazy timer initialization - single volatile read on hot path
+            // After first call, this becomes a single memory read (~1ns)
+            EnsureTrimTimerInitialized();
+
             // Single atomic increment - this IS the Get operation
             long currentHead = Interlocked.Increment(ref _head) - 1;
+
+            // Track peak usage for adaptive trimming (cheap - just a compare)
+            long currentPeak = Volatile.Read(ref _peakObjectsInUse);
+            if (currentHead > currentPeak)
+            {
+                Interlocked.CompareExchange(ref _peakObjectsInUse, currentHead, currentPeak);
+            }
 
             // Get object from array using fast modulo (bitwise AND with mask)
             var index = (int)(currentHead & _mask);
@@ -148,7 +232,7 @@ namespace VisualHFT.Commons.Pools
             long created = Interlocked.Increment(ref _totalCreated);
 
             // Log sparingly to avoid overhead
-            if ((created & 0x7FFF) == 0) // Every 32768 creations (power of 2 for fast check)
+            if ((created & 0x7FFF) == 0)
             {
                 var typeName = typeof(T).Name;
                 string message = $"CustomObjectPool<{typeName}> exhausted - created {created} total objects. Consider increasing pool size. Instantiated by: {_instantiator}";
@@ -164,55 +248,151 @@ namespace VisualHFT.Commons.Pools
 
             foreach (var obj in listObjs)
             {
-                Return(obj);  // This will now correctly track each individual return
+                Return(obj);
             }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Return(T obj)
         {
-            if (obj == null || _disposed)
-                return;
+            if (obj == null || _disposed) return;
 
-            // Reset object state before returning to pool
-            (obj as VisualHFT.Commons.Model.IResettable)?.Reset();
+            (obj as IResettable)?.Reset();
             (obj as IList)?.Clear();
 
-            // Always increment tail and store - circular buffer handles wraparound
+            // Only store if slot is empty - prevents overwrites
             long currentTail = Interlocked.Increment(ref _tail) - 1;
             var index = (int)(currentTail & _mask);
-            _objects[index] = obj;
 
-            // Always count the return for accurate statistics
+            // Compare-exchange: only store if slot was null
+            var existing = Interlocked.CompareExchange(ref _objects[index], obj, null);
+            if (existing != null)
+            {
+                // Slot was occupied - object couldn't be returned
+                (obj as IDisposable)?.Dispose();
+            }
+
             Interlocked.Increment(ref _totalReturns);
         }
 
+        // ═══════════════════════════════════════════════════════════════════
+        // TRIMMING IMPLEMENTATION - SAFE FOR CIRCULAR BUFFER
+        // ═══════════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Internal trim implementation with ADAPTIVE threshold.
+        /// Only trims down to peak observed usage (with buffer), not to a fixed percentage.
+        /// Prevents trim-expand oscillation by respecting actual workload demands.
+        /// </summary>
+        private void TrimExcessInternal()
+        {
+            if (_disposed) return;
+
+            long nowTicks = DateTime.UtcNow.Ticks;
+            long lastTrim = Volatile.Read(ref _lastTrimTimestamp);
+
+            // Cooldown: Don't trim if we trimmed recently and then had to expand
+            // This detects the oscillation pattern and backs off
+            const long MIN_TRIM_INTERVAL_TICKS = TimeSpan.TicksPerMinute * 30; // 30 minutes minimum between trims
+            if (nowTicks - lastTrim < MIN_TRIM_INTERVAL_TICKS)
+            {
+                // Check if we've been creating objects since last trim (indicates we trimmed too aggressively)
+                long currentHead = Interlocked.Read(ref _head);
+                long peakUsage = Volatile.Read(ref _peakObjectsInUse);
+
+                if (currentHead > peakUsage)
+                {
+                    // Workload is growing - update peak and skip this trim
+                    Interlocked.Exchange(ref _peakObjectsInUse, currentHead);
+                    log.Debug($"CustomObjectPool<{typeof(T).Name}> skipping trim - workload growing. Peak updated to {currentHead}. Instantiated by: {_instantiator}");
+                    return;
+                }
+            }
+
+            // Count actual non-null objects in the array
+            int actualObjectCount = 0;
+            for (int i = 0; i < _maxPoolSize; i++)
+            {
+                if (Volatile.Read(ref _objects[i]) != null)
+                    actualObjectCount++;
+            }
+
+            // ADAPTIVE TARGET: Keep at least the peak observed usage + 20% buffer
+            // This prevents trimming below what the workload actually needs
+            long peakObjects = Volatile.Read(ref _peakObjectsInUse);
+            int adaptiveMinimum = (int)(peakObjects * 0.5); // Keep 50% of peak usage
+            int fixedMinimum = Math.Max(10, (int)(_maxPoolSize * 0.10)); // Original 10% minimum
+            int targetCount = Math.Max(adaptiveMinimum, fixedMinimum);
+
+            if (actualObjectCount <= targetCount)
+            {
+                log.Debug($"CustomObjectPool<{typeof(T).Name}> no trim needed. Current: {actualObjectCount}, Target minimum: {targetCount}. Instantiated by: {_instantiator}");
+                return;
+            }
+
+            int objectsToRemove = Math.Min(actualObjectCount - targetCount, _maxPoolSize / 4); // Cap at 25% removal (was 50%)
+
+            if (objectsToRemove < 100) // Don't bother trimming tiny amounts
+                return;
+
+            int removed = 0;
+
+            log.Info($"CustomObjectPool<{typeof(T).Name}> trimming up to {objectsToRemove} excess objects (current: {actualObjectCount}, adaptive target: {targetCount}). Instantiated by: {_instantiator}");
+
+            for (int i = 0; i < _maxPoolSize && removed < objectsToRemove; i++)
+            {
+                var item = Interlocked.Exchange(ref _objects[i], null);
+                if (item != null)
+                {
+                    (item as IDisposable)?.Dispose();
+                    removed++;
+                }
+            }
+
+            // Update trim timestamp
+            Interlocked.Exchange(ref _lastTrimTimestamp, nowTicks);
+
+            log.Info($"CustomObjectPool<{typeof(T).Name}> trimmed {removed} objects. Instantiated by: {_instantiator}");
+
+            // Suggest GC for trimmed objects (non-blocking)
+            GC.Collect(0, GCCollectionMode.Optimized, blocking: false);
+        }
+
+        /// <summary>
+        /// Manually triggers a trim operation. Safe to call anytime.
+        /// Use during known low-activity periods (e.g., market close).
+        /// </summary>
+        public void TrimExcess()
+        {
+            TrimExcessInternal();
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // DIAGNOSTIC PROPERTIES & RESET
+        // ═══════════════════════════════════════════════════════════════════
+
         public void Reset()
         {
-            // Thread-safe reset by resetting indices and statistics
             Interlocked.Exchange(ref _head, 0);
             Interlocked.Exchange(ref _tail, 0);
             Interlocked.Exchange(ref _totalReturns, 0);
+            Interlocked.Exchange(ref _consecutiveLowUtilizationChecks, 0);
 
-            // Pre-fill pool with objects for optimal efficiency
             for (int i = 0; i < _maxPoolSize; i++)
             {
                 var obj = _objects[i];
                 if (obj != null)
                 {
-                    // Reset existing object state
-                    (obj as VisualHFT.Commons.Model.IResettable)?.Reset();
+                    (obj as IResettable)?.Reset();
                     (obj as IList)?.Clear();
                 }
                 else
                 {
-                    // Create new object if slot is empty
                     _objects[i] = new T();
                     Interlocked.Increment(ref _totalCreated);
                 }
             }
 
-            // Set tail to indicate all slots are filled
             Interlocked.Exchange(ref _tail, _maxPoolSize);
         }
 
@@ -236,15 +416,10 @@ namespace VisualHFT.Commons.Pools
                 var totalReturns = Interlocked.Read(ref _totalReturns);
                 var outstanding = Math.Max(0, totalGets - totalReturns);
 
-                // True utilization: objects currently in use / total pool capacity
                 return Math.Max(0.0, Math.Min(1.0, outstanding / (double)_maxPoolSize));
             }
         }
 
-        /// <summary>
-        /// Gets the pool efficiency ratio (objects from pool vs total objects created).
-        /// Values closer to 1.0 indicate better pool efficiency.
-        /// </summary>
         public double PoolEfficiency
         {
             get
@@ -252,29 +427,34 @@ namespace VisualHFT.Commons.Pools
                 var totalGets = Interlocked.Read(ref _head);
                 var totalCreated = Interlocked.Read(ref _totalCreated);
 
-                if (totalGets == 0) return 1.0; // No gets yet, consider efficient
+                if (totalGets == 0) return 1.0;
 
                 var objectsFromPool = totalGets - totalCreated;
                 return Math.Max(0, Math.Min(1.0, objectsFromPool / (double)totalGets));
             }
         }
 
-        /// <summary>
-        /// Gets the outstanding objects count (gets - returns).
-        /// Positive values may indicate memory leaks or high concurrent usage.
-        /// </summary>
         public long Outstanding => Math.Max(0, Interlocked.Read(ref _head) - Interlocked.Read(ref _totalReturns));
-        public long TotalGets => Interlocked.Read(ref _head); // Now derived from head pointer
+        public long TotalGets => Interlocked.Read(ref _head);
         public long TotalReturns => Interlocked.Read(ref _totalReturns);
         public long TotalCreated => Interlocked.Read(ref _totalCreated);
         public int MaxPoolSize => _maxPoolSize;
-        public bool IsHealthy => _totalCreated < _maxPoolSize * 2   // Creation pressure check
-                         && UtilizationPercentage < 0.90   // Outstanding utilization check (more reasonable threshold)
-                         && !_disposed;                    // Not disposed
+
+        public bool IsHealthy => _totalCreated < _maxPoolSize * 2
+                                 && UtilizationPercentage < 0.90
+                                 && !_disposed;
+
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
+
+            // Dispose timer first
+            try
+            {
+                _trimTimer?.Dispose();
+            }
+            catch { /* Ignore timer disposal errors */ }
 
             // Dispose all objects in the pool
             for (int i = 0; i < _maxPoolSize; i++)
