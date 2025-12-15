@@ -195,12 +195,36 @@ public class HelperCustomQueue<T> : IDisposable
         {
             while (Volatile.Read(ref _isRunning) && !Volatile.Read(ref _disposed))
             {
+                // ✅ FIX: Check pause state BEFORE attempting to take items
+                if (Volatile.Read(ref _isPaused))
+                {
+                    // Wait until unpaused or disposed
+                    _resetEvent.Reset();
+                    while (Volatile.Read(ref _isPaused) && !Volatile.Read(ref _disposed))
+                    {
+                        _resetEvent.Wait(TimeSpan.FromMilliseconds(50));
+                    }
+                    continue; // Re-check loop conditions
+                }
+
                 // Drain all available items FIRST (batch processing)
                 int processedCount = 0;
                 while (_queue.TryTake(out var item))
                 {
-                    if (Volatile.Read(ref _disposed) || Volatile.Read(ref _isPaused))
+                    // ✅ FIX: Check pause BEFORE processing, but item is already taken
+                    // If paused mid-batch, we need to process this item then stop
+                    if (Volatile.Read(ref _disposed))
                         break;
+
+                    // ✅ FIX: If paused, put item back or process it - choosing to process
+                    // since we already took it (alternative: use Peek if available)
+                    if (Volatile.Read(ref _isPaused))
+                    {
+                        // Re-add the item to preserve it (at the end, but better than losing)
+                        // Note: This changes order slightly but preserves data
+                        _queue.Add(item);
+                        break;
+                    }
 
                     try
                     {
