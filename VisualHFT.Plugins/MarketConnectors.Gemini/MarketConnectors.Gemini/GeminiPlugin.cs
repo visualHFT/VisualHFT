@@ -164,7 +164,7 @@ namespace MarketConnectors.Gemini
             _heartbeatTimer = new Timer(CheckConnectionStatus, null, TimeSpan.Zero, TimeSpan.FromSeconds(5)); // Check every 5 seconds
 
             await InitializeUserPrivateOrders();
-            
+
             // ✅ FIX: Set status here for consistency (status was previously set in InitializeDeltasAsync)
             log.Info($"Plugin has successfully started.");
             RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
@@ -271,7 +271,7 @@ namespace MarketConnectors.Gemini
                         }
                     }
                 });
-                
+
                 try
                 {
                     await _socketClient.Start();
@@ -422,6 +422,7 @@ namespace MarketConnectors.Gemini
                 if (response != null)
                 {
                     var orderBook = ToOrderBookModel(response, normalizedSymbol);
+
                     // Atomic replace
                     _localOrderBooks[normalizedSymbol] = orderBook;
                 }
@@ -488,7 +489,14 @@ namespace MarketConnectors.Gemini
 
         private VisualHFT.Model.OrderBook ToOrderBookModel(InitialResponse data, string symbol)
         {
-            var identifiedPriceDecimalPlaces = RecognizeDecimalPlacesAutomatically(data.asks.Select(x => x.price));
+            int identifiedPriceDecimalPlaces = -1;
+
+            if (data.asks != null && data.asks.Count > 0)
+                identifiedPriceDecimalPlaces = RecognizeDecimalPlacesAutomatically(data.asks.Select(x => x.price));
+            else if (data.bids != null && data.bids.Count > 0)
+                identifiedPriceDecimalPlaces = RecognizeDecimalPlacesAutomatically(data.bids.Select(x => x.price));
+            else
+                return null;
 
             var lob = new VisualHFT.Model.OrderBook(symbol, identifiedPriceDecimalPlaces, _settings.DepthLevels);
             lob.ProviderID = _settings.Provider.ProviderID;
@@ -930,12 +938,14 @@ namespace MarketConnectors.Gemini
             var symbol = snapshotModel.Symbol;
             var orderBook = ToOrderBookModel(localModel, symbol);
 
-            _localOrderBooks.AddOrUpdate(
-                symbol,
-                orderBook,
-                (key, oldValue) => orderBook
-            );
-
+            if (orderBook != null)
+            {
+                _localOrderBooks.AddOrUpdate(
+                    symbol,
+                    orderBook,
+                    (key, oldValue) => orderBook
+                );
+            }
 
             //once called snapshots, we need to update the LOB
             List<List<string>> changes = new List<List<string>>();
@@ -1022,7 +1032,7 @@ namespace MarketConnectors.Gemini
             //UPDATE VISUALHFT CORE & CREATE MODEL TO RETURN
             if (!modelList.Any())
                 throw new Exception("No data was found in the json file.");
-            
+
             _localUserOrders.Clear();
             foreach (var item in modelList)
             {
