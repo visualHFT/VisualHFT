@@ -14,7 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="CryptoExchange.Net" Version="9.13.0" />
+    <PackageReference Include="CryptoExchange.Net" Version="10.0.0" />
     <PackageReference Include="Websocket.Client" Version="5.3.0" />
   </ItemGroup>
 
