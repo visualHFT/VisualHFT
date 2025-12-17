@@ -82,6 +82,7 @@ public class HelperCustomQueue<T> : IDisposable
         if (_queueName == null)
             _queueName = GetInstantiator();
 
+        
         Start();
     }
     private static string GetInstantiator()
@@ -117,9 +118,9 @@ public class HelperCustomQueue<T> : IDisposable
             return;
         if (item == null)
             return;
-        
+
         _queue.Add(item);
-        
+
         if (_monitorHealth)
             Interlocked.Increment(ref _totalMessagesAdded); // Ultra-fast atomic increment
 
@@ -220,9 +221,38 @@ public class HelperCustomQueue<T> : IDisposable
                     // since we already took it (alternative: use Peek if available)
                     if (Volatile.Read(ref _isPaused))
                     {
-                        // Re-add the item to preserve it (at the end, but better than losing)
-                        // Note: This changes order slightly but preserves data
-                        _queue.Add(item);
+                        // ✅ FIX: Only re-add if queue is still accepting additions
+                        if (!_queue.IsAddingCompleted)
+                        {
+                            try
+                            {
+                                _queue.Add(item);
+                            }
+                            catch (InvalidOperationException)
+                            {
+                                // Queue was completed between check and add - process item instead
+                                try
+                                {
+                                    _actionOnRead(item);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _onError?.Invoke(ex);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // Queue is complete, process the item we already took
+                            try
+                            {
+                                _actionOnRead(item);
+                            }
+                            catch (Exception ex)
+                            {
+                                _onError?.Invoke(ex);
+                            }
+                        }
                         break;
                     }
 
