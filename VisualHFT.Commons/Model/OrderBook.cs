@@ -1,5 +1,4 @@
-﻿using log4net.Core;
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using VisualHFT.Commons.Model;
 using VisualHFT.Commons.Pools;
 using VisualHFT.Enums;
@@ -304,8 +303,8 @@ namespace VisualHFT.Model
             using (_data.EnterReadLock())
             {
                 lobMetrics.LoadData(_data.Asks, _data.Bids, MaxDepth);
+                _data.ImbalanceValue = lobMetrics.Calculate_OrderImbalance();
             }
-            _data.ImbalanceValue = lobMetrics.Calculate_OrderImbalance();
         }
         public bool LoadData(IEnumerable<BookItem> asks, IEnumerable<BookItem> bids)
         {
@@ -614,21 +613,25 @@ namespace VisualHFT.Model
 
         public virtual void AddOrUpdateLevel(DeltaBookItem item)
         {
-            if (!item.IsBid.HasValue)
+            AddOrUpdateLevel(item.IsBid, item.EntryID, item.Price, item.Size, item.LocalTimeStamp, item.ServerTimeStamp);
+        }
+        public virtual void AddOrUpdateLevel(bool? IsBid, string EntryID, double? Price, double? Size, DateTime LocalTimeStamp, DateTime ServerTimeStamp)
+        {
+            if (!IsBid.HasValue)
                 return;
 
 
-            if (item.Size.HasValue && IsZeroAtDp(item.Size.Value, this.SizeDecimalPlaces))
+            if (Size.HasValue && IsZeroAtDp(Size.Value, this.SizeDecimalPlaces))
             {
-                DeleteLevel(item);     // explicit remove, not an update to zero
+                DeleteLevel(IsBid, EntryID, Price, Size);     // explicit remove, not an update to zero
                 return;
             }
 
             using (_data.EnterWriteLock())
             {
-                var _list = (item.IsBid.HasValue && item.IsBid.Value ? _data.Bids : _data.Asks);
+                var _list = (IsBid.HasValue && IsBid.Value ? _data.Bids : _data.Asks);
                 BookItem? itemFound = null;
-                var targetPrice = item.Price.Value;  // Cache the value
+                var targetPrice = Price.Value;  // Cache the value
                 var count = _list.Count();
 
                 for (int i = 0; i < count; i++)
@@ -641,53 +644,56 @@ namespace VisualHFT.Model
                 }
 
 
-
                 if (itemFound == null)
-                    AddLevel(item);
+                    AddLevel(IsBid, EntryID, Price, Size, LocalTimeStamp, ServerTimeStamp);
                 else
-                    UpdateLevel(item);
+                    UpdateLevel(IsBid, EntryID, Price, Size, LocalTimeStamp, ServerTimeStamp);
             }
 
         }
         public virtual void AddLevel(DeltaBookItem item)
         {
-            if (!item.IsBid.HasValue)
+            AddLevel(item.IsBid, item.EntryID, item.Price, item.Size, item.LocalTimeStamp, item.ServerTimeStamp);
+        }
+        public virtual void AddLevel(bool? IsBid, string EntryID, double? Price, double? Size, DateTime LocalTimeStamp, DateTime ServerTimeStamp)
+        {
+            if (!IsBid.HasValue)
                 return;
-            if (item.Size.HasValue && IsZeroAtDp(item.Size.Value, this.SizeDecimalPlaces))
+            if (Size.HasValue && IsZeroAtDp(Size.Value, this.SizeDecimalPlaces))
             {
-                DeleteLevel(item);
+                DeleteLevel(IsBid, EntryID, Price, Size);
                 return;
             }
             // quantize what we store so internals never carry float dust
-            item.Size = QuantizeToDp(item.Size.Value, this.SizeDecimalPlaces);
+            Size = QuantizeToDp(Size.Value, this.SizeDecimalPlaces);
 
             // Check if it is appropriate to add a new item to the Limit Order Book (LOB). 
             // If the item exceeds the depth scope defined by MaxDepth, it should not be added.
             // If the item is within the acceptable depth, truncate the LOB to ensure it adheres to the MaxDepth limit.
             bool willNewItemFallOut = false;
 
-            var list = item.IsBid.Value ? _data.Bids : _data.Asks;
+            var list = IsBid.Value ? _data.Bids : _data.Asks;
             var listCount = list.Count();
-            if (item.IsBid.Value)
+            if (IsBid.Value)
             {
-                willNewItemFallOut = listCount > this.MaxDepth && item.Price < list.Min(x => x.Price);
+                willNewItemFallOut = listCount > this.MaxDepth && Price < list.Min(x => x.Price);
             }
             else
             {
-                willNewItemFallOut = listCount > this.MaxDepth && item.Price > list.Max(x => x.Price);
+                willNewItemFallOut = listCount > this.MaxDepth && Price > list.Max(x => x.Price);
             }
 
             if (!willNewItemFallOut)
             {
                 // FIXED: Get from shared pool instead of instance pool
                 var _level = BookItemPool.Get();
-                _level.EntryID = item.EntryID;
-                _level.Price = item.Price;
-                _level.IsBid = item.IsBid.Value;
-                _level.LocalTimeStamp = item.LocalTimeStamp;
+                _level.EntryID = EntryID;
+                _level.Price = Price;
+                _level.IsBid = IsBid.Value;
+                _level.LocalTimeStamp = LocalTimeStamp;
                 _level.ProviderID = _data.ProviderID;
-                _level.ServerTimeStamp = item.ServerTimeStamp;
-                _level.Size = item.Size;
+                _level.ServerTimeStamp = ServerTimeStamp;
+                _level.Size = Size;
                 _level.Symbol = _data.Symbol;
                 _level.PriceDecimalPlaces = this.PriceDecimalPlaces;
                 _level.SizeDecimalPlaces = this.SizeDecimalPlaces;
@@ -722,19 +728,23 @@ namespace VisualHFT.Model
 
         public virtual void UpdateLevel(DeltaBookItem item)
         {
-            if (item.Size.HasValue && IsZeroAtDp(item.Size.Value, this.SizeDecimalPlaces))
+            UpdateLevel(item.IsBid, item.EntryID, item.Price, item.Size, item.LocalTimeStamp, item.ServerTimeStamp);
+        }
+        public virtual void UpdateLevel(bool? IsBid, string EntryID, double? Price, double? Size, DateTime LocalTimeStamp, DateTime ServerTimeStamp)
+        {
+            if (Size.HasValue && IsZeroAtDp(Size.Value, this.SizeDecimalPlaces))
             {
-                DeleteLevel(item);
+                DeleteLevel(IsBid, EntryID, Price, Size);
                 return;
             }
             // quantize what we store so internals never carry float dust
-            item.Size = QuantizeToDp(item.Size.Value, this.SizeDecimalPlaces);
+            Size = QuantizeToDp(Size.Value, this.SizeDecimalPlaces);
 
-            (item.IsBid.HasValue && item.IsBid.Value ? _data.Bids : _data.Asks).Update(x => x.Price == item.Price,
+            (IsBid.HasValue && IsBid.Value ? _data.Bids : _data.Asks).Update(x => x.Price == Price,
                 existingItem =>
                 {
                     double oldSize = existingItem.Size ?? 0.0;
-                    double newSize = item.Size ?? 0.0;
+                    double newSize = Size ?? 0.0;
 
                     if (oldSize > newSize)
                     {
@@ -756,45 +766,50 @@ namespace VisualHFT.Model
                         // (Keep _updatedVolumeScaled unused; hook here if needed.)
                     }
 
-                    existingItem.Price = item.Price;
-                    existingItem.Size = item.Size;
-                    existingItem.LocalTimeStamp = item.LocalTimeStamp;
-                    existingItem.ServerTimeStamp = item.ServerTimeStamp;
+                    existingItem.Price = Price;
+                    existingItem.Size = Size;
+                    existingItem.LocalTimeStamp = LocalTimeStamp;
+                    existingItem.ServerTimeStamp = ServerTimeStamp;
                 });
         }
 
+
         public virtual void DeleteLevel(DeltaBookItem item)
         {
-            if (string.IsNullOrEmpty(item.EntryID) && (!item.Price.HasValue || item.Price.Value == 0))
+            DeleteLevel(item.IsBid, item.EntryID, item.Price, item.Size);
+        }
+        public virtual void DeleteLevel(bool? IsBid, string EntryID, double? Price, double? Size)
+        {
+            if (string.IsNullOrEmpty(EntryID) && (!Price.HasValue || Price.Value == 0))
                 throw new Exception("DeltaBookItem cannot be deleted since has no price or no EntryID.");
             using (_data.EnterWriteLock())
             {
                 BookItem _itemToDelete = null;
 
-                if (!string.IsNullOrEmpty(item.EntryID))
+                if (!string.IsNullOrEmpty(EntryID))
                 {
-                    if (item.IsBid.HasValue && item.IsBid.Value && _data.Bids == null)
+                    if (IsBid.HasValue && IsBid.Value && _data.Bids == null)
                         return;
-                    if (item.IsBid.HasValue && !item.IsBid.Value && _data.Asks == null)
+                    if (IsBid.HasValue && !IsBid.Value && _data.Asks == null)
                         return;
 
-                    _itemToDelete = (item.IsBid.HasValue && item.IsBid.Value ? _data.Bids : _data.Asks)
-                        .FirstOrDefault(x => x.EntryID == item.EntryID);
+                    _itemToDelete = (IsBid.HasValue && IsBid.Value ? _data.Bids : _data.Asks)
+                        .FirstOrDefault(x => x.EntryID == EntryID);
                 }
-                else if (item.Price.HasValue && item.Price > 0)
+                else if (Price.HasValue && Price > 0)
                 {
-                    if (item.IsBid.HasValue && item.IsBid.Value && _data.Bids == null)
+                    if (IsBid.HasValue && IsBid.Value && _data.Bids == null)
                         return;
-                    if (item.IsBid.HasValue && !item.IsBid.Value && _data.Asks == null)
+                    if (IsBid.HasValue && !IsBid.Value && _data.Asks == null)
                         return;
 
-                    _itemToDelete = (item.IsBid.HasValue && item.IsBid.Value ? _data.Bids : _data.Asks)
-                        .FirstOrDefault(x => x.Price == item.Price);
+                    _itemToDelete = (IsBid.HasValue && IsBid.Value ? _data.Bids : _data.Asks)
+                        .FirstOrDefault(x => x.Price == Price);
                 }
 
                 if (_itemToDelete != null)
                 {
-                    (item.IsBid.HasValue && item.IsBid.Value ? _data.Bids : _data.Asks).Remove(_itemToDelete);
+                    (IsBid.HasValue && IsBid.Value ? _data.Bids : _data.Asks).Remove(_itemToDelete);
                     // FIXED: Return to shared pool instead of instance pool
                     Interlocked.Increment(ref _deletedLevels);
                     double sz = _itemToDelete.Size ?? 0.0;

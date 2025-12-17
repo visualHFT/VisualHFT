@@ -245,6 +245,8 @@ namespace VisualHFT.Model
             {
                 if (disposing)
                 {
+                    Clear();  // This returns all BookItems to the pool
+
                     _rwLock?.Dispose();
                     _Bids?.Clear();
                     _Asks?.Clear();
