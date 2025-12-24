@@ -1,21 +1,23 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Threading.Channels;
+using VisualHFT.Helpers;
 
 public class HelperCustomQueue<T> : IDisposable
 {
-    private readonly BlockingCollection<T> _queue;
-    private readonly ManualResetEventSlim _resetEvent;
+    private readonly Channel<T> _channel;
+    private readonly ChannelWriter<T> _writer;
+    private readonly ChannelReader<T> _reader;
     private readonly string _queueName;
     private readonly Action<T> _actionOnRead;
     private readonly Action<Exception> _onError;
     private readonly CancellationTokenSource _cts;
     private readonly CancellationToken _token;
-    private CancellationTokenRegistration _tokenRegistration;
     private Task _taskConsumer;
     private bool _isPaused;
     private bool _isRunning;
     private bool _disposed;
+    private readonly ManualResetEventSlim _pauseEvent = new ManualResetEventSlim(true);
     private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
     // Depth thresholds for unbounded queue health monitoring
@@ -26,11 +28,19 @@ public class HelperCustomQueue<T> : IDisposable
     #region Ultra-Lean Performance Monitoring
 
     private readonly bool _monitorHealth = false; // Set to true to enable performance monitoring
-    // Atomic counters - zero allocation, minimal overhead
+
+    // Separate counters into different cache lines to prevent false sharing
+    // Each cache line is 64 bytes, we pad with 56 bytes after each 8-byte counter
+
+    // Producer counters (cache line 1)
     private long _totalMessagesAdded = 0;
+    private long _pad1a, _pad2a, _pad3a, _pad4a, _pad5a, _pad6a, _pad7a;
+
+    // Consumer counters (cache line 2) - only track when monitoring enabled
     private long _totalMessagesProcessed = 0;
     private long _totalProcessingTimeTicks = 0;
-
+    private long _currentDepth = 0;
+    private long _pad1b, _pad2b, _pad3b, _pad4b, _pad5b;
     // Sliding window for rate calculation (lock-free)
     private long _lastReportTicks = DateTime.UtcNow.Ticks;
     private long _lastReportAdded = 0;
@@ -39,13 +49,16 @@ public class HelperCustomQueue<T> : IDisposable
     private long _lastReportTimestamp = Stopwatch.GetTimestamp();
     private static readonly long REPORT_INTERVAL_TICKS = Stopwatch.Frequency * 5; // 5 seconds
 
+    // Cached timestamp for monitoring to avoid Stopwatch overhead
+    private long _cachedTimestamp = 0;
+
 
     // Public read-only properties for monitoring
     public string QueueName => _queueName;
     public int Count => CurrentQueueDepth;   // Implement the IQuantifiable interface
-    public long TotalMessagesAdded => _totalMessagesAdded;
-    public long TotalMessagesProcessed => _totalMessagesProcessed;
-    public int CurrentQueueDepth => _disposed ? 0 : (_queue?.Count ?? 0);
+    public long TotalMessagesAdded => Volatile.Read(ref _totalMessagesAdded);
+    public long TotalMessagesProcessed => Volatile.Read(ref _totalMessagesProcessed);
+    public int CurrentQueueDepth => _disposed ? 0 : (int)Volatile.Read(ref _currentDepth);
     public bool IsBounded => _isBounded;
     public int HealthyThreshold => _healthyThreshold;
     public int WarningThreshold => _warningThreshold;
@@ -53,8 +66,9 @@ public class HelperCustomQueue<T> : IDisposable
     {
         get
         {
-            var processed = _totalMessagesProcessed;
-            return processed > 0 ? (_totalProcessingTimeTicks / (double)processed) / 10.0 : 0; // Convert ticks to microseconds
+            var processed = Volatile.Read(ref _totalMessagesProcessed);
+            var totalTime = Volatile.Read(ref _totalProcessingTimeTicks);
+            return processed > 0 ? (totalTime / (double)processed) / 10.0 : 0; // Convert ticks to microseconds
         }
     }
 
@@ -65,24 +79,28 @@ public class HelperCustomQueue<T> : IDisposable
         _queueName = queueName;
         _actionOnRead = actionOnRead;
         _onError = onError;
-        _queue = new BlockingCollection<T>();  // Unbounded queue
+
+        // Create unbounded channel with optimal settings for HFT
+        var options = new UnboundedChannelOptions
+        {
+            SingleReader = true,                     // Optimize for single consumer
+            SingleWriter = false,                    // Multiple producers
+            AllowSynchronousContinuations = false    // Prevent thread hopping
+        };
+        _channel = Channel.CreateUnbounded<T>(options);
+        _writer = _channel.Writer;
+        _reader = _channel.Reader;
+
         _isBounded = false;  // This is an unbounded queue
         _healthyThreshold = healthyThreshold;
         _warningThreshold = warningThreshold;
-        _resetEvent = new ManualResetEventSlim(false);
         _cts = new CancellationTokenSource();
         _token = _cts.Token;
         _monitorHealth = monitorHealth;
-        // Register once — avoids per-Wait() allocation
-        _tokenRegistration = _token.Register(static s =>
-        {
-            var evt = (ManualResetEventSlim)s!;
-            evt.Set(); // Wake up waiters when canceled
-        }, _resetEvent);
         if (_queueName == null)
             _queueName = GetInstantiator();
 
-        
+
         Start();
     }
     private static string GetInstantiator()
@@ -114,18 +132,24 @@ public class HelperCustomQueue<T> : IDisposable
 
     public void Add(T item)
     {
-        if (Volatile.Read(ref _disposed) || _queue.IsAddingCompleted)
+        if (Volatile.Read(ref _disposed) || _reader.Completion.IsCompleted)
             return;
         if (item == null)
             return;
 
-        _queue.Add(item);
+        // Only increment counters if write succeeds
+        if (_writer.TryWrite(item)) // Lock-free, non-blocking write
+        {
+            if (_monitorHealth)
+                Interlocked.Increment(ref _totalMessagesAdded); // Ultra-fast atomic increment
 
-        if (_monitorHealth)
-            Interlocked.Increment(ref _totalMessagesAdded); // Ultra-fast atomic increment
+            if (_monitorHealth)
+            {
+                var depth = Interlocked.Increment(ref _currentDepth);
+                // No need to signal - Channel handles this internally
+            }
+        }
 
-        if (_queue.Count == 1)
-            _resetEvent.Set();
         // Periodic reporting (minimal overhead check)
         if (_monitorHealth)
             CheckAndReportPerformance();
@@ -134,43 +158,44 @@ public class HelperCustomQueue<T> : IDisposable
     // Change field declarations (no need to change to volatile keyword)
     // Instead, use Volatile.Read/Write at access points
 
-    public void PauseConsumer() => Volatile.Write(ref _isPaused, true);
+    public void PauseConsumer()
+    {
+        if (Volatile.Read(ref _disposed))
+            return;
+        Volatile.Write(ref _isPaused, true);
+        _pauseEvent.Reset();
+    }
 
     public void ResumeConsumer()
     {
         if (Volatile.Read(ref _disposed))
             return;
-
         Volatile.Write(ref _isPaused, false);
-        _resetEvent.Set();
+        _pauseEvent.Set();
     }
 
     public void Stop()
     {
-        if (_disposed)
-            return;
+        Volatile.Write(ref _isRunning, false);
 
-        _isRunning = false;
+        // Release paused consumer first to avoid blocking
+        _pauseEvent.Set();
 
         try
         {
-            _cts.Cancel();
+            _cts.Cancel(); // Will wake up WaitToReadAsync
         }
         catch (ObjectDisposedException)
         {
-            // CancellationTokenSource already disposed, ignore
+            // Already disposed
         }
-
-        _queue.CompleteAdding();
-        _resetEvent.Set();
-
         try
         {
-            _taskConsumer?.Wait(TimeSpan.FromSeconds(2));
+            _writer.Complete(); // Signal no more items will be written
         }
-        catch
+        catch (ChannelClosedException)
         {
-            // ignore
+            // Already completed
         }
     }
 
@@ -179,7 +204,12 @@ public class HelperCustomQueue<T> : IDisposable
         if (_disposed)
             return;
 
-        while (_queue.TryTake(out _)) { }
+        // Drain all items without processing them
+        while (_reader.TryRead(out _))
+        {
+            if (_monitorHealth)
+                Interlocked.Decrement(ref _currentDepth); // Track depth
+        }
     }
 
     private void Start()
@@ -188,30 +218,32 @@ public class HelperCustomQueue<T> : IDisposable
         _taskConsumer = Task.Run(RunConsumer);
     }
 
-    private void RunConsumer()
+    private async Task RunConsumer()
     {
-        var sw = new Stopwatch();
+        var startTimestamp = 0L;
 
         try
         {
             while (Volatile.Read(ref _isRunning) && !Volatile.Read(ref _disposed))
             {
-                // ✅ FIX: Check pause state BEFORE attempting to take items
+                // Check if paused - wait for resume signal (already on background thread)
                 if (Volatile.Read(ref _isPaused))
                 {
-                    // Wait until unpaused or disposed
-                    _resetEvent.Reset();
-                    while (Volatile.Read(ref _isPaused) && !Volatile.Read(ref _disposed))
-                    {
-                        _resetEvent.Wait(TimeSpan.FromMilliseconds(50));
-                    }
-                    continue; // Re-check loop conditions
+                    _pauseEvent.Wait(_token);
+                    continue;
                 }
 
-                // Drain all available items FIRST (batch processing)
+                // Wait for items to be available - Channel's native async waiting
+                if (!await _reader.WaitToReadAsync(_token))
+                    break; // Channel completed or cancelled
+
+                // Process all available items in batch
                 int processedCount = 0;
-                while (_queue.TryTake(out var item))
+                while (_reader.TryRead(out var item))
                 {
+                    if (_monitorHealth)
+                        Interlocked.Decrement(ref _currentDepth); // Track depth
+
                     // ✅ FIX: Check pause BEFORE processing, but item is already taken
                     // If paused mid-batch, we need to process this item then stop
                     if (Volatile.Read(ref _disposed))
@@ -221,16 +253,32 @@ public class HelperCustomQueue<T> : IDisposable
                     // since we already took it (alternative: use Peek if available)
                     if (Volatile.Read(ref _isPaused))
                     {
-                        // ✅ FIX: Only re-add if queue is still accepting additions
-                        if (!_queue.IsAddingCompleted)
+                        // ✅ FIX: Only re-add if channel is still accepting writes
+                        if (!_reader.Completion.IsCompleted)
                         {
                             try
                             {
-                                _queue.Add(item);
+                                if (!_writer.TryWrite(item))
+                                {
+                                    // TryWrite failed - process item to prevent loss
+                                    try
+                                    {
+                                        _actionOnRead(item);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _onError?.Invoke(ex);
+                                    }
+                                }
+                                else
+                                {
+                                    if (_monitorHealth)
+                                        Interlocked.Increment(ref _currentDepth); // Track depth
+                                }
                             }
-                            catch (InvalidOperationException)
+                            catch (ChannelClosedException)
                             {
-                                // Queue was completed between check and add - process item instead
+                                // Channel was closed between check and write - process item instead
                                 try
                                 {
                                     _actionOnRead(item);
@@ -243,7 +291,7 @@ public class HelperCustomQueue<T> : IDisposable
                         }
                         else
                         {
-                            // Queue is complete, process the item we already took
+                            // Channel is complete, process the item we already took
                             try
                             {
                                 _actionOnRead(item);
@@ -258,13 +306,16 @@ public class HelperCustomQueue<T> : IDisposable
 
                     try
                     {
-                        if (_monitorHealth) sw.Restart();
+                        if (_monitorHealth)
+                        {
+                            startTimestamp = Stopwatch.GetTimestamp();
+                        }
                         _actionOnRead(item);
                         if (_monitorHealth)
                         {
-                            sw.Stop();
+                            var elapsedTicks = Stopwatch.GetTimestamp() - startTimestamp;
                             Interlocked.Increment(ref _totalMessagesProcessed);
-                            Interlocked.Add(ref _totalProcessingTimeTicks, sw.ElapsedTicks);
+                            Interlocked.Add(ref _totalProcessingTimeTicks, elapsedTicks);
                         }
                         processedCount++;
                     }
@@ -272,29 +323,10 @@ public class HelperCustomQueue<T> : IDisposable
                     {
                         _onError?.Invoke(ex);
                     }
-                }
+                } // End of item processing loop
 
-                // Only wait if we processed nothing (queue was empty)
-                if (processedCount == 0 && !Volatile.Read(ref _disposed))
-                {
-                    // Use SpinWait for short waits, then fall back to event
-                    var spinner = new SpinWait();
-                    while (_queue.Count == 0 && !spinner.NextSpinWillYield)
-                    {
-                        spinner.SpinOnce();
-                    }
-
-                    if (_queue.Count == 0)
-                    {
-                        _resetEvent.Reset();
-                        // Double-check after reset
-                        if (_queue.Count == 0 && !Volatile.Read(ref _disposed))
-                        {
-                            _resetEvent.Wait(TimeSpan.FromMilliseconds(1));
-                        }
-                    }
-                }
-            }
+                // No need for manual waiting - WaitToReadAsync handles this
+            } // End of main while loop
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -318,8 +350,8 @@ public class HelperCustomQueue<T> : IDisposable
     }
     private void ReportPerformanceMetrics(long currentTicks, long lastReportTicks)
     {
-        var currentAdded = _totalMessagesAdded;
-        var currentProcessed = _totalMessagesProcessed;
+        var currentAdded = Volatile.Read(ref _totalMessagesAdded);
+        var currentProcessed = Volatile.Read(ref _totalMessagesProcessed);
         var intervalSeconds = (currentTicks - lastReportTicks) / (double)TimeSpan.TicksPerSecond;
 
         var addedInInterval = currentAdded - _lastReportAdded;
@@ -345,9 +377,18 @@ public class HelperCustomQueue<T> : IDisposable
 
         _disposed = true;
         Stop();
-        _tokenRegistration.Dispose();
-        _resetEvent.Dispose();
-        _queue.Dispose();
+
+        // Wait for consumer task to complete before disposing primitives
+        try
+        {
+            _taskConsumer?.Wait(TimeSpan.FromSeconds(5));
+        }
+        catch (AggregateException)
+        {
+            // Task faulted - ignore during dispose
+        }
+
+        _pauseEvent.Dispose();
         _cts.Dispose();
     }
 }
