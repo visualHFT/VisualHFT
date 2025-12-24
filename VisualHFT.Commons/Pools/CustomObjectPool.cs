@@ -118,6 +118,12 @@ namespace VisualHFT.Commons.Pools
 
 
 
+
+
+
+
+
+
         }
 
         private static int GetNextPowerOfTwo(int value)
@@ -530,6 +536,8 @@ namespace VisualHFT.Commons.Pools
             int refilled = 0;
             for (int i = 0; i < _segmentSize; i++)
             {
+                if (primarySegment[i] == null)
+                    continue;
                 var obj = Volatile.Read(ref primarySegment[i]);
                 if (obj != null)
                 {
