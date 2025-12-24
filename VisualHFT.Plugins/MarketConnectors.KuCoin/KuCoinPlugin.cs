@@ -16,7 +16,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using VisualHFT.Commons.Helpers;
@@ -32,7 +31,7 @@ namespace MarketConnectors.KuCoin
     public class KuCoinPlugin : BasePluginDataRetriever, IDataRetrieverTestable
     {
         private bool _disposed = false; // to track whether the object has been disposed
-        
+
         // ✅ FIX: Add synchronization and reconnection flag
         private readonly SemaphoreSlim _startStopLock = new SemaphoreSlim(1, 1);
         private bool isReconnecting = false;
@@ -58,8 +57,6 @@ namespace MarketConnectors.KuCoin
         private readonly object _userOrdersLock = new object();
 
         private readonly ConcurrentBag<CallResult<UpdateSubscription>> _allSubscriptions = new();
-
-        private readonly CustomObjectPool<DeltaBookItem> DeltaBookItemPool = new CustomObjectPool<DeltaBookItem>(1_000);
 
         private int pingFailedAttempts = 0;
         private System.Timers.Timer _timerPing;
@@ -111,7 +108,7 @@ namespace MarketConnectors.KuCoin
                 }
 
                 await base.StartAsync(); //call the base first
-                
+
                 // ✅ Dispose old clients first
                 _socketClient?.Dispose();
                 _restClient?.Dispose();
@@ -255,7 +252,7 @@ namespace MarketConnectors.KuCoin
                 {
                     q?.PauseConsumer(); // ⬅️ ADD THIS: Ensure paused before stopping
                     q?.Stop();
-                    q?.Dispose(); 
+                    q?.Dispose();
                 }
                 _tradesBuffers.Clear();
             }
@@ -352,7 +349,7 @@ namespace MarketConnectors.KuCoin
                     foreach (KucoinOrder item in orders.Data.Items)
                     {
                         VisualHFT.Model.Order localuserOrder;
-                        
+
                         lock (_userOrdersLock) // ✅ Protect dictionary operations
                         {
                             if (!this._localUserOrders.ContainsKey(item.Id))
@@ -369,7 +366,7 @@ namespace MarketConnectors.KuCoin
                                 localuserOrder.PricePlaced = (double)item.Price;
                                 localuserOrder.Symbol = GetNormalizedSymbol(item.Symbol);
                                 localuserOrder.TimeInForce = eORDERTIMEINFORCE.GTC;
-                                
+
                                 this._localUserOrders.Add(item.Id, localuserOrder);
                             }
                             else
@@ -408,7 +405,7 @@ namespace MarketConnectors.KuCoin
                             localuserOrder.FilledPercentage =
                                 Math.Round((100 / localuserOrder.Quantity) * localuserOrder.FilledQuantity, 2);
                         } // ✅ Release lock before raising event
-                        
+
                         RaiseOnDataReceived(localuserOrder);
 
                     }
@@ -459,7 +456,7 @@ namespace MarketConnectors.KuCoin
                                             HelprNorificationManagerTypes.WARNING,
                                             HelprNorificationManagerCategories.PLUGINS);
                                     }
-                                    HelperCustomQueue <Tuple<DateTime, string, KucoinStreamOrderBook>> buffer;
+                                    HelperCustomQueue<Tuple<DateTime, string, KucoinStreamOrderBook>> buffer;
                                     lock (_buffersLock) // ✅ Protect access
                                     {
                                         if (!_eventBuffers.TryGetValue(normalizedSymbol, out buffer))
@@ -511,7 +508,7 @@ namespace MarketConnectors.KuCoin
                 foreach (var symbol in GetAllNonNormalizedSymbols())
                 {
                     var normalizedSymbol = GetNormalizedSymbol(symbol);
-                    
+
                     // ✅ Protect dictionary write with write lock
                     _orderBooksLock.EnterWriteLock();
                     try
@@ -532,11 +529,11 @@ namespace MarketConnectors.KuCoin
                     var depthSnapshot =
                         await _restClient.SpotApi.ExchangeData
                             .GetAggregatedPartialOrderBookAsync(symbol, 20);
-                            
+
                     if (depthSnapshot.Success)
                     {
                         var orderBook = ToOrderBookModel(depthSnapshot.Data, normalizedSymbol);
-                        
+
                         // ✅ Protect dictionary write with write lock
                         _orderBooksLock.EnterWriteLock();
                         try
@@ -547,9 +544,9 @@ namespace MarketConnectors.KuCoin
                         {
                             _orderBooksLock.ExitWriteLock();
                         }
-                        
+
                         log.Info($"{this.Name}: LOB {normalizedSymbol} level 2 Successfully loaded.");
-                        
+
                         // ✅ Protect buffer access with lock
                         lock (_buffersLock)
                         {
@@ -608,7 +605,7 @@ namespace MarketConnectors.KuCoin
                 trade.ProviderId = _settings.Provider.ProviderID;
                 trade.ProviderName = _settings.Provider.ProviderName;
                 trade.IsBuy = item.Item2.Side == OrderSide.Buy;
-                
+
                 // ✅ Protect OrderBook access with read lock
                 _orderBooksLock.EnterReadLock();
                 try
@@ -754,52 +751,21 @@ namespace MarketConnectors.KuCoin
                         if (item.Quantity == 0 && item.Price == 0)
                             continue;
 
-                        var delta = DeltaBookItemPool.Get(); // ✅ Get from pool
-                        try
-                        {
-                            delta.MDUpdateAction = item.Quantity == 0 ? eMDUpdateAction.Delete : eMDUpdateAction.None;
-                            delta.Price = (double)item.Price;
-                            delta.Size = (double)item.Quantity;
-                            delta.IsBid = true;
-                            delta.LocalTimeStamp = DateTime.Now;
-                            delta.ServerTimeStamp = ts;
-                            delta.Symbol = symbol;
-
-                            if (item.Quantity == 0)
-                                local_lob.DeleteLevel(delta);
-                            else
-                                local_lob.AddOrUpdateLevel(delta);
-                        }
-                        finally
-                        {
-                            DeltaBookItemPool.Return(delta); // ✅ Always return
-                        }
+                        if (item.Quantity == 0)
+                            local_lob.DeleteLevel(true, string.Empty, (double)item.Price, (double)item.Quantity);
+                        else
+                            local_lob.AddOrUpdateLevel(true, string.Empty, (double)item.Price, (double)item.Quantity, DateTime.Now, ts);
                     }
 
                     foreach (var item in lob_update.Changes.Asks)
                     {
                         if (item.Quantity == 0 && item.Price == 0)
                             continue;
-                        var delta = DeltaBookItemPool.Get(); // ✅ Get from pool
-                        try
-                        {
-                            delta.MDUpdateAction = item.Quantity == 0 ? eMDUpdateAction.Delete : eMDUpdateAction.None;
-                            delta.Price = (double)item.Price;
-                            delta.Size = (double)item.Quantity;
-                            delta.IsBid = false;
-                            delta.LocalTimeStamp = DateTime.Now;
-                            delta.ServerTimeStamp = ts;
-                            delta.Symbol = symbol;
 
-                            if (item.Quantity == 0)
-                                local_lob.DeleteLevel(delta);
-                            else
-                                local_lob.AddOrUpdateLevel(delta);
-                        }
-                        finally
-                        {
-                            DeltaBookItemPool.Return(delta); // ✅ Always return
-                        }
+                        if (item.Quantity == 0)
+                            local_lob.DeleteLevel(false, string.Empty, (double)item.Price, (double)item.Quantity);
+                        else
+                            local_lob.AddOrUpdateLevel(false, string.Empty, (double)item.Price, (double)item.Quantity, DateTime.Now, ts);
                     }
 
                     local_lob.Sequence = lob_update.SequenceEnd;
@@ -833,7 +799,10 @@ namespace MarketConnectors.KuCoin
                 var result = await _restClient.SpotApi.ExchangeData.GetServerTimeAsync();
                 if (result != null)
                 {
-                    var timeLapseInMicroseconds = DateTime.Now.Subtract(ini).TotalMicroseconds;
+
+
+
+
 
 
                     // Connection is healthy
@@ -1021,7 +990,7 @@ namespace MarketConnectors.KuCoin
             {
                 localuserOrder.Status = eORDERSTATUS.CANCELED;
             }
-            else 
+            else
             {
                 if (localuserOrder.FilledQuantity > 0)
                     localuserOrder.Status = (localuserOrder.PendingQuantity > 0 ? eORDERSTATUS.PARTIALFILLED : eORDERSTATUS.FILLED);
@@ -1085,7 +1054,7 @@ namespace MarketConnectors.KuCoin
                     _timerPing?.Dispose();
                     _socketClient?.Dispose();
                     _restClient?.Dispose();
-                    
+
                     // ✅ FIX: Dispose semaphore
                     _startStopLock?.Dispose();
 
