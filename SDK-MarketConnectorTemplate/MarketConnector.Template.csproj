@@ -9,19 +9,20 @@
   <PropertyGroup>
     <!-- Target .NET 8 on Windows.  The UseWPF flag is required by
          VisualHFT even though plug‑ins themselves do not create windows. -->
-    <TargetFramework>net8.0-windows8.0</TargetFramework>
+    <TargetFramework>net8.0-windows10.0.17763.0</TargetFramework>
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
-    <SupportedOSPlatformVersion>8.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
   </PropertyGroup>
 
   <!-- Include any sample message files or other resources here.  These
        directives copy the files to the output directory so the plug‑in can
        read them at runtime.  Remove this ItemGroup if not needed. -->
   <ItemGroup>
-    <!-- <Content Include="sample_messages\Scenario1.json"> -->
-    <!--   <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory> -->
-    <!-- </Content> -->
+    <Content Include="SampleMessages\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <None Include="SampleMessages\README.md" />
   </ItemGroup>
 
   <ItemGroup>
@@ -30,24 +31,12 @@
          Remove this line if you plan to implement your own WebSocket/REST
          client. -->
     <!-- <PackageReference Include="ExchangeApi.Net" Version="1.0.0" /> -->
-    <PackageReference Include="log4net" Version="3.1.0" />
+    <PackageReference Include="log4net" Version="3.2.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- All plug‑ins must reference VisualHFT.Commons.  Adjust the
-         relative path based on where this template lives in your solution. -->
-    <ProjectReference Include="..\..\VisualHFT.Commons\VisualHFT.Commons.csproj" />
-  </ItemGroup>
-
-  <!-- WPF UI files.  The settings control is included as a Page so
-       it can be discovered and rendered by VisualHFT's plug‑in manager.
-       The code-behind is compiled as a normal C# file. -->
-  <ItemGroup>
-    <Page Include="UserControls\PluginSettingsView.xaml">
-      <Generator>MSBuild:Compile</Generator>
-      <SubType>Designer</SubType>
-    </Page>
-    <Compile Include="UserControls\PluginSettingsView.xaml.cs" />
+    <ProjectReference Include="..\VisualHFT.Commons\VisualHFT.Commons.csproj" />
   </ItemGroup>
 
 </Project>

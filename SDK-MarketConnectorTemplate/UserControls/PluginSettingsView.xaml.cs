@@ -3,7 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Navigation;
 
-namespace MarketConnectorTemplate.UserControls
+namespace MarketConnector.Template.UserControls
 {
     /// <summary>
     /// Interaction logic for PluginSettingsView.xaml

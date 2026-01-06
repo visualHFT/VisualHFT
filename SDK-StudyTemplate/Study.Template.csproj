@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    VisualHFT study plug‑ins are simple .NET class libraries targeting the
+    Windows desktop.  They reference VisualHFT.Commons to gain access to
+    base classes such as BasePluginStudy, and they may rely on
+    additional packages for calculations and visualization.
+  -->
+  <PropertyGroup>
+    <!-- Target .NET 8 on Windows.  The UseWPF flag is required by
+         VisualHFT for study plug‑ins that provide UI settings. -->
+    <TargetFramework>net8.0-windows10.0.17763.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWPF>true</UseWPF>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Common packages for study plugins -->
+    <PackageReference Include="log4net" Version="3.2.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <!-- Add additional packages as needed for your study calculations -->
+    <!-- <PackageReference Include="MathNet.Numerics" Version="5.0.0" /> -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VisualHFT.Commons.WPF\VisualHFT.Commons.WPF.csproj" />
+    <ProjectReference Include="..\VisualHFT.Commons\VisualHFT.Commons.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Update="UserControls\PluginSettingsView.xaml.cs">
+      <SubType>Code</SubType>
+    </Compile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Page Update="UserControls\PluginSettingsView.xaml">
+      <SubType>Designer</SubType>
+    </Page>
+  </ItemGroup>
+
+</Project>

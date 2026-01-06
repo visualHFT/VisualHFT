@@ -1,0 +1,8 @@
+{
+  "type": "subscription",
+  "timestamp": 1703980802500,
+  "status": "success",
+  "channel": "orderbook",
+  "symbol": "BTC-USD",
+  "reqid": "req_123456"
+}

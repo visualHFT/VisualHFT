@@ -1,0 +1,9 @@
+{
+  "type": "trade",
+  "symbol": "BTC-USD",
+  "timestamp": 1703980801500,
+  "id": "1234567890",
+  "price": 43251.00,
+  "quantity": 0.5432,
+  "side": "buy"
+}

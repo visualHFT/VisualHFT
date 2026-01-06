@@ -1,0 +1,7 @@
+{
+  "type": "error",
+  "timestamp": 1703980802000,
+  "code": 400,
+  "message": "Invalid symbol format",
+  "details": "Symbol 'INVALID' is not supported. Please use format like 'BTC-USD'."
+}
