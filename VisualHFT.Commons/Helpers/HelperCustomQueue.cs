@@ -229,13 +229,40 @@ public class HelperCustomQueue<T> : IDisposable
                 // Check if paused - wait for resume signal (already on background thread)
                 if (Volatile.Read(ref _isPaused))
                 {
-                    _pauseEvent.Wait(_token);
+                    try
+                    {
+                        _pauseEvent.Wait(_token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Expected when stopping - exit gracefully
+                        break;
+                    }
                     continue;
                 }
 
+
                 // Wait for items to be available - Channel's native async waiting
-                if (!await _reader.WaitToReadAsync(_token))
-                    break; // Channel completed or cancelled
+                // Should handle the cancellation gracefully
+                try
+                {
+                    if (!await _reader.WaitToReadAsync(_token))
+                        break;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Expected when stopping - exit gracefully
+                    break;
+                }
+                catch (ChannelClosedException)
+                {
+                    // Channel was closed - exit gracefully
+                    break;
+                }
+                catch (Exception)
+                {
+                    break;
+                }
 
                 // Process all available items in batch
                 int processedCount = 0;
