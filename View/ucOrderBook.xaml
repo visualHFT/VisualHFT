@@ -294,7 +294,7 @@
                     Visibility="Visible"
                     HorizontalAlignment="Stretch" VerticalAlignment="Stretch" 
                     IsEnabled="False"
-                    IsMouseWheelEnabled="False" 
+                    IsMouseWheelEnabled="True" 
                     Style="{StaticResource BaseChartStyle}" 
                     Model="{Binding RealTimePricePlotModel, Mode=OneWay}" >
                 </oxy:PlotView>

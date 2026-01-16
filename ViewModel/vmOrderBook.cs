@@ -282,9 +282,9 @@ namespace VisualHFT.ViewModel
                 TicklineColor = OxyColors.White,
                 TextColor = OxyColors.White,
                 AxislineStyle = LineStyle.Solid,
-                IsAxisVisible = false,
-                IsPanEnabled = false,
-                IsZoomEnabled = false,
+                IsAxisVisible = true,
+                IsPanEnabled = true,
+                IsZoomEnabled = true,
             };
 
             var yAxis = new OxyPlot.Axes.LinearAxis()
@@ -309,7 +309,9 @@ namespace VisualHFT.ViewModel
                 Minimum = 1,
                 Maximum = 100,
                 Key = "RedColorAxis",
-                IsAxisVisible = false
+                IsAxisVisible = true,
+                IsPanEnabled = true,
+                IsZoomEnabled = true,
             };
 
             var GreenColorAxis = new LinearColorAxis
