@@ -24,7 +24,7 @@
         </ResourceDictionary>
     </UserControl.Resources>
 
-    <GroupBox Padding="10" VerticalAlignment="Stretch" HorizontalAlignment="Stretch">
+    <GroupBox Padding="5" VerticalAlignment="Stretch" HorizontalAlignment="Stretch">
         <GroupBox.Header>
             <Grid>
                 <!-- Assuming Horizontal alignment of controls -->
@@ -36,6 +36,7 @@
                 <!-- Title Label -->
                 <Button Content="⛭"  Grid.Column="0"  VerticalAlignment="Top" HorizontalAlignment="Left" Width="20" Height="20" Margin="0 0 0 0" Padding="0" ToolTip="Settings" Command="{Binding OpenSettingsCommand}" />
                 <TextBlock Text="{Binding Title}" Grid.Column="0" VerticalAlignment="Center" Margin="25 0 0 0"/>
+                <Button Content="📈" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Right" Width="20" Height="20" Margin="0" Padding="0" ToolTip="Open Chart" Command="{Binding OpenChartCommand}" />
             </Grid>
         </GroupBox.Header>
 

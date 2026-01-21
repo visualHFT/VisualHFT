@@ -48,6 +48,14 @@ namespace VisualHFT.ViewModels
         private static readonly CustomObjectPool<PlotInfo> _plotInfoPool =
             new CustomObjectPool<PlotInfo>(maxPoolSize: _MAX_ITEMS * 10);
 
+        // Dynamic Y-Axis Support (Feature Flag)
+        private readonly bool _enableDynamicYAxes = true; // Set to false to disable
+        private Dictionary<string, LinearAxis> _dynamicYAxes = new Dictionary<string, LinearAxis>();
+        private Dictionary<string, string> _seriesToAxisMap = new Dictionary<string, string>();
+        private Dictionary<string, (double min, double max)> _axisRanges = new Dictionary<string, (double, double)>();
+        private int _axisCounter = 0;
+        private const double RANGE_THRESHOLD = 100.0; // Create new axis if range differs by 10x
+
         public vmChartStudy(IStudy study)
         {
             _QUEUE = new HelperCustomQueue<BaseStudyModel>($"<BaseStudyModel>_{study.TileTitle}", QUEUE_onReadAction, QUEUE_onErrorAction);
@@ -126,7 +134,8 @@ namespace VisualHFT.ViewModels
 
             var newModel = new BaseStudyModel();
             newModel.copyFrom(e);
-            newModel.Tag = ((IStudy)sender).TileTitle;
+            if (string.IsNullOrEmpty(newModel.Tag))
+                newModel.Tag = ((IStudy)sender).TileTitle;
             _QUEUE.Add(newModel);
         }
 
@@ -162,50 +171,16 @@ namespace VisualHFT.ViewModels
                     {
                         double oaDate = pointToAdd.Date.ToOADate();
 
-                        // Iterate directly over the dictionary to avoid allocation
-                        foreach (var kvp in _seriesByStudy)
+                        if (item.IsIndependentMetric)
                         {
-                            var key = kvp.Key;
-                            var series = kvp.Value;
-
-                            if (keyTitle == key)
-                            {
-                                // If the incoming item is the same as current series, add it
-                                series.Points.Add(new DataPoint(oaDate, pointToAdd.Value));
-                                if (series.Points.Count > _MAX_ITEMS)
-                                    series.Points.RemoveAt(0);
-                            }
-                            else
-                            {
-                                // For all the other studies, add the existing last value again
-                                var dataCollection = _dataByStudy[key];
-                                var colCount = dataCollection.Count();
-                                if (colCount > 0)
-                                {
-                                    // Use indexer instead of LastOrDefault() for O(1) access
-                                    var lastPoint = dataCollection[colCount - 1];
-                                    // ✅ Create NEW instance from pool
-                                    var duplicatePoint = _plotInfoPool.Get();
-                                    duplicatePoint.Date = lastPoint.Date;
-                                    duplicatePoint.Value = lastPoint.Value;
-
-                                    dataCollection.Add(duplicatePoint);
-                                    series.Points.Add(new DataPoint(oaDate, duplicatePoint.Value));
-                                    if (series.Points.Count > _MAX_ITEMS)
-                                        series.Points.RemoveAt(0);
-                                }
-                            }
+                            // Update only the matching series for independent metrics
+                            UpdateIndependentSeries(keyTitle, oaDate, pointToAdd, item);
                         }
-
-                        // ADD MARKET PRICE if available
-                        if (_seriesMarket != null)
+                        else
                         {
-                            _seriesMarket.Points.Add(new DataPoint(oaDate, _lastMarketMidPrice));
-                            if (_seriesMarket.Points.Count > _MAX_ITEMS)
-                                _seriesMarket.Points.RemoveAt(0);
+                            // Update all series for synchronized metrics (backward compatible)
+                            UpdateAllSynchronizedSeries(keyTitle, oaDate, pointToAdd, item);
                         }
-
-                        _IS_DATA_AVAILABLE = true;
                     }
                     else
                     {
@@ -215,10 +190,8 @@ namespace VisualHFT.ViewModels
             }
             catch (Exception ex)
             {
-                var _error = $"{this.StudyTitle} Unhandled error in the Chart queue: {ex.Message}";
-                log.Error(_error, ex);
-                HelperNotificationManager.Instance.AddNotification(this.StudyTitle, _error, HelprNorificationManagerTypes.ERROR, HelprNorificationManagerCategories.CORE);
-                System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(() => Clear()), System.Windows.Threading.DispatcherPriority.Normal);
+                log.Error($"Error processing chart data for series {item.Tag}: {ex.Message}", ex);
+                HelperNotificationManager.Instance.AddNotification(this.StudyTitle, $"Error processing chart data for series {item.Tag}: {ex.Message}", HelprNorificationManagerTypes.ERROR, HelprNorificationManagerCategories.CORE);
             }
         }
         private void QUEUE_onErrorAction(Exception ex)
@@ -226,6 +199,126 @@ namespace VisualHFT.ViewModels
             var _error = $"{this.StudyTitle} Unhandled error in the Chart queue: {ex.Message}";
             log.Error(_error, ex);
             HelperNotificationManager.Instance.AddNotification(this.StudyTitle, _error, HelprNorificationManagerTypes.ERROR, HelprNorificationManagerCategories.CORE);
+        }
+
+        private void UpdateIndependentSeries(string keyTitle, double oaDate, PlotInfo pointToAdd, BaseStudyModel item)
+        {
+            // Only update the series that matches this key
+            if (_seriesByStudy.ContainsKey(keyTitle))
+            {
+                var series = _seriesByStudy[keyTitle];
+
+                // Handle dynamic Y-axis assignment ONLY for independent metrics (like PerformanceCounters)
+                // Regular multi-study plugins keep using the default yAxe
+                if (_enableDynamicYAxes && item.IsIndependentMetric)
+                {
+                    if (series.YAxisKey == "yAxe")
+                    {
+                        // First data point for independent metric - assign proper axis
+                        string axisKey = GetOrCreateAxisForSeries(keyTitle, pointToAdd.Value);
+
+                        // Double-check the axis exists in the plot model
+                        if (MyPlotModel.Axes.Any(a => a.Key == axisKey))
+                        {
+                            series.YAxisKey = axisKey;
+                        }
+                        else
+                        {
+                            // Fallback to default axis if something went wrong
+                            series.YAxisKey = "yAxe";
+                            log.Warn($"Dynamic axis {axisKey} not found, using default axis for series {keyTitle}");
+                        }
+                    }
+                    else
+                    {
+                        // Check if value exceeds current axis range and update if needed
+                        if (_dynamicYAxes.TryGetValue(series.YAxisKey, out var currentAxis))
+                        {
+                            double value = pointToAdd.Value;
+                            if (value > currentAxis.ActualMaximum * 0.9) // Approaching max
+                            {
+                                currentAxis.Maximum = value * 1.5; // Expand range
+                                _axisRanges[series.YAxisKey] = (_axisRanges[series.YAxisKey].min, value);
+                            }
+                            else if (value < currentAxis.ActualMinimum * 1.1) // Approaching min
+                            {
+                                currentAxis.Minimum = value * 0.8; // Expand range
+                                _axisRanges[series.YAxisKey] = (value, _axisRanges[series.YAxisKey].max);
+                            }
+                        }
+                    }
+                }
+
+                // Add point with error handling
+                try
+                {
+                    series.Points.Add(new DataPoint(oaDate, pointToAdd.Value));
+                    if (series.Points.Count > _MAX_ITEMS)
+                        series.Points.RemoveAt(0);
+                }
+                catch (Exception ex)
+                {
+                    // Log error but don't crash - skip this point
+                    log.Warn($"Failed to add point to series {keyTitle}: Value={pointToAdd.Value}, Axis={series.YAxisKey}, Error={ex.Message}");
+                }
+            }
+
+            // Still update market price if available
+            if (_seriesMarket != null && item.MarketMidPrice > 0)
+            {
+                _seriesMarket.Points.Add(new DataPoint(oaDate, (double)item.MarketMidPrice));
+                if (_seriesMarket.Points.Count > _MAX_ITEMS)
+                    _seriesMarket.Points.RemoveAt(0);
+            }
+
+            _IS_DATA_AVAILABLE = true;
+        }
+
+        private void UpdateAllSynchronizedSeries(string keyTitle, double oaDate, PlotInfo pointToAdd, BaseStudyModel item)
+        {
+            // Iterate directly over the dictionary to avoid allocation
+            foreach (var kvp in _seriesByStudy)
+            {
+                var key = kvp.Key;
+                var series = kvp.Value;
+
+                if (keyTitle == key)
+                {
+                    // If the incoming item is the same as current series, add it
+                    series.Points.Add(new DataPoint(oaDate, pointToAdd.Value));
+                    if (series.Points.Count > _MAX_ITEMS)
+                        series.Points.RemoveAt(0);
+                }
+                else
+                {
+                    // For all the other studies, add the existing last value again
+                    var dataCollection = _dataByStudy[key];
+                    var colCount = dataCollection.Count();
+                    if (colCount > 0)
+                    {
+                        // Use indexer instead of LastOrDefault() for O(1) access
+                        var lastPoint = dataCollection[colCount - 1];
+                        // ✅ Create NEW instance from pool
+                        var duplicatePoint = _plotInfoPool.Get();
+                        duplicatePoint.Date = lastPoint.Date;
+                        duplicatePoint.Value = lastPoint.Value;
+
+                        dataCollection.Add(duplicatePoint);
+                        series.Points.Add(new DataPoint(oaDate, duplicatePoint.Value));
+                        if (series.Points.Count > _MAX_ITEMS)
+                            series.Points.RemoveAt(0);
+                    }
+                }
+            }
+
+            // ADD MARKET PRICE if available
+            if (_seriesMarket != null && item.MarketMidPrice > 0)
+            {
+                _seriesMarket.Points.Add(new DataPoint(oaDate, (double)item.MarketMidPrice));
+                if (_seriesMarket.Points.Count > _MAX_ITEMS)
+                    _seriesMarket.Points.RemoveAt(0);
+            }
+            _IS_DATA_AVAILABLE = true;
         }
 
         private void dataByStudy_OnRemoving(object? sender, PlotInfo e)
@@ -378,7 +471,7 @@ namespace VisualHFT.ViewModels
                 DataFieldY = "Value",
                 EdgeRenderingMode = EdgeRenderingMode.PreferSpeed,
                 XAxisKey = "xAxe",
-                YAxisKey = "yAxe",
+                YAxisKey = "yAxe", // Always use default axis for backward compatibility
                 StrokeThickness = 2
             };
             MyPlotModel.Series.Add(series);
@@ -386,6 +479,8 @@ namespace VisualHFT.ViewModels
             _dataByStudy.Add(title, new AggregatedCollection<PlotInfo>(_settings.AggregationLevel, _MAX_ITEMS, x => x.Date, Aggregation));
             _dataByStudy[title].OnRemoving += dataByStudy_OnRemoving;
             _seriesByStudy.Add(title, series);
+
+            // For dynamic Y-axes, we'll update on first data point if needed
         }
 
 
@@ -431,6 +526,18 @@ namespace VisualHFT.ViewModels
                     lock (MyPlotModel.SyncRoot)
                     {
                         MyPlotModel.Series.Clear();
+
+                        // Clean up dynamic Y-axes
+                        if (_enableDynamicYAxes && _dynamicYAxes != null)
+                        {
+                            foreach (var axis in _dynamicYAxes.Values)
+                            {
+                                MyPlotModel.Axes.Remove(axis);
+                            }
+                            _dynamicYAxes.Clear();
+                            _axisRanges.Clear();
+                            _seriesToAxisMap.Clear();
+                        }
                     }
                 }
 
@@ -523,6 +630,146 @@ namespace VisualHFT.ViewModels
             }
         }
 
+        #region Dynamic Y-Axis Support (Can be disabled by setting _enableDynamicYAxes = false)
+
+        private string GetOrCreateAxisForSeries(string seriesName, double value)
+        {
+            if (!_enableDynamicYAxes)
+                return "yAxe";
+
+            // Check if series already has an axis
+            if (_seriesToAxisMap.TryGetValue(seriesName, out string existingAxis))
+            {
+                // Verify the axis still exists in the plot model
+                if (MyPlotModel.Axes.Any(a => a.Key == existingAxis))
+                    return existingAxis;
+                else
+                {
+                    // Axis was removed, clean up mapping
+                    _seriesToAxisMap.Remove(seriesName);
+                }
+            }
+
+            // Find the best axis for this value range
+            string bestAxis = FindBestAxisForValue(value);
+
+            // Assign series to axis
+            _seriesToAxisMap[seriesName] = bestAxis;
+
+            return bestAxis;
+        }
+
+        private string FindBestAxisForValue(double value)
+        {
+            // Normalize value for comparison (handle negative values)
+            double absValue = Math.Abs(value);
+            if (absValue < 0.001) absValue = 0.001; // Avoid division by zero
+
+            // Check existing axes
+            foreach (var kvp in _axisRanges)
+            {
+                var axisRange = kvp.Value;
+                double rangeRatio = Math.Max(absValue / axisRange.max, axisRange.max / absValue);
+
+                // If this value fits within the range (within threshold), use this axis
+                if (rangeRatio <= RANGE_THRESHOLD)
+                {
+                    // Update the range if necessary
+                    if (absValue > axisRange.max)
+                    {
+                        _axisRanges[kvp.Key] = (axisRange.min, absValue);
+                        // Update the actual axis maximum
+                        if (_dynamicYAxes.TryGetValue(kvp.Key, out var axis))
+                        {
+                            axis.Maximum = absValue * 1.2; // Add 20% padding
+                        }
+                    }
+                    return kvp.Key;
+                }
+            }
+
+            // No suitable axis found, create new one
+            return CreateNewAxis(absValue);
+        }
+
+        private string CreateNewAxis(double value)
+        {
+            string axisKey = $"yAxeDynamic{_axisCounter++}";
+
+            // Determine axis properties based on value range
+            string title = ""; // No title for dynamic axes to prevent overlap
+            string format = "N";
+            double min = 0;
+            double max = Math.Max(value * 2, 10); // Ensure minimum range
+
+            if (value > 1000000)
+            {
+                format = "N1";
+                max = Math.Max(value / 1000000 * 2, 10);
+            }
+            else if (value > 1000)
+            {
+                format = "N1";
+                max = Math.Max(value / 1000 * 2, 10);
+            }
+            else if (value <= 100 && value >= 0)
+            {
+                format = "N0";
+                max = 100;
+                min = 0;
+            }
+            else if (value < 0)
+            {
+                // Handle negative values
+                min = value * 2;
+                max = 0;
+            }
+
+            var newAxis = new LinearAxis()
+            {
+                Key = axisKey,
+                Position = AxisPosition.Left,
+                Title = title, // Empty title for dynamic axes
+                StringFormat = format,
+                FontSize = 10,
+                TitleColor = OxyColors.LightSkyBlue,
+                AxislineColor = OxyColors.LightSkyBlue,
+                TicklineColor = OxyColors.LightSkyBlue,
+                TextColor = OxyColors.LightSkyBlue,
+                AxislineStyle = LineStyle.Solid,
+                IsPanEnabled = false,
+                IsZoomEnabled = false,
+                TitleFontSize = 16,
+                Minimum = min,
+                Maximum = max
+            };
+
+            // Add axis to plot model
+            MyPlotModel.Axes.Add(newAxis);
+            _dynamicYAxes[axisKey] = newAxis;
+            _axisRanges[axisKey] = (Math.Min(min, value), Math.Max(max, value));
+
+            return axisKey;
+        }
+
+        private void UpdateSeriesAxis(string seriesName, LineSeries series)
+        {
+            if (!_enableDynamicYAxes)
+            {
+                series.YAxisKey = "yAxe";
+                return;
+            }
+
+            // Get current data to determine axis
+            if (_dataByStudy.TryGetValue(seriesName, out var dataCollection) && dataCollection.Count() > 0)
+            {
+                var lastValue = dataCollection.Last().Value;
+                string axisKey = GetOrCreateAxisForSeries(seriesName, lastValue);
+                series.YAxisKey = axisKey;
+            }
+        }
+
+        #endregion
 
         protected virtual void Dispose(bool disposing)
         {

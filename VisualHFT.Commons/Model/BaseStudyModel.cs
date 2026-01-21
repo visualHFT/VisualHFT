@@ -11,6 +11,7 @@ namespace VisualHFT.Model
         private decimal _marketMidPrice;
         private bool _hasData = false;
 
+
         /// <summary>
         /// Optional custom formatter. When set, UI uses this instead of Format string.
         /// </summary>
@@ -79,6 +80,7 @@ namespace VisualHFT.Model
 
         public string Tooltip { get; set; }
         public string Tag { get; set; }
+        public bool IsIndependentMetric { get; set; }
         public bool AddItemSkippingAggregation { get; set; }
 
         public void copyFrom(BaseStudyModel e)
@@ -94,7 +96,8 @@ namespace VisualHFT.Model
             IsStale = e.IsStale;
             Tooltip = e.Tooltip;
             Tag = e.Tag;
-            AddItemSkippingAggregation = false;
+            IsIndependentMetric = e.IsIndependentMetric;
+            AddItemSkippingAggregation = e.AddItemSkippingAggregation;
         }
 
         public void Reset()
@@ -110,6 +113,7 @@ namespace VisualHFT.Model
             IsStale = false;
             Tooltip = null;
             Tag = null;
+            IsIndependentMetric = false;
             AddItemSkippingAggregation = false;
         }
     }
