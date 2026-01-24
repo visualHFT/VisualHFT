@@ -1,16 +1,18 @@
 ﻿using Prism.Mvvm;
 using System;
+using System.Collections.ObjectModel;
 using System.Linq;
-using System.Windows.Input;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
-using VisualHFT.Helpers;
-using VisualHFT.Model;
-using VisualHFT.ViewModels;
+using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using VisualHFT.Commons.Studies;
+using VisualHFT.Helpers;
+using VisualHFT.Model;
 using VisualHFT.View;
-using System.Collections.ObjectModel;
-using System.Windows.Controls;
+using VisualHFT.ViewModels;
 
 namespace VisualHFT.ViewModel
 {
@@ -28,6 +30,8 @@ namespace VisualHFT.ViewModel
 
         private System.Windows.Visibility _settingButtonVisibility;
         private System.Windows.Visibility _chartButtonVisibility;
+        private System.Windows.Visibility _footerVisibility;
+
         private System.Windows.Visibility _valueVisibility = Visibility.Visible;
         private System.Windows.Visibility _ucVisibility = Visibility.Hidden;
 
@@ -69,14 +73,16 @@ namespace VisualHFT.ViewModel
                 IsGroup = true;
                 ValueVisibility = Visibility.Hidden;
                 UCVisibility = Visibility.Visible;
+                study.IsChartButtonVisible = false; //hide chart button for user controls
 
                 OpenSettingsCommand = new RelayCommand<vmTile>(OpenSettings);
             }
             RaisePropertyChanged(nameof(SelectedSymbol));
             RaisePropertyChanged(nameof(SelectedProviderName));
             RaisePropertyChanged(nameof(IsGroup));
-            SettingButtonVisibility = Visibility.Visible;
-            ChartButtonVisibility = Visibility.Visible;
+            SettingButtonVisibility = study.IsSettingsButtonVisisble ? Visibility.Visible : Visibility.Collapsed;
+            ChartButtonVisibility = study.IsChartButtonVisible ? Visibility.Visible : Visibility.Collapsed;
+            FooterVisibility = study.IsFooterVisible ? Visibility.Visible : Visibility.Collapsed;
         }
         public vmTile(IMultiStudy multiStudy)
         {
@@ -279,6 +285,11 @@ namespace VisualHFT.ViewModel
             get { return _chartButtonVisibility; }
             set { SetProperty(ref _chartButtonVisibility, value); }
         }
+        public System.Windows.Visibility FooterVisibility
+        {
+            get { return _footerVisibility; }
+            set { SetProperty(ref _footerVisibility, value); }
+        }
         public UserControl CustomControl
         {
             get => _customControl;
@@ -332,6 +343,33 @@ namespace VisualHFT.ViewModel
 
         }
 
+
+        /*
+         *   Stop all studies (main and children) asynchronously
+         *   ONLY FOR L3 VERSION
+         */
+        public async Task StopAllAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken = cancellationToken == default ? CancellationToken.None : cancellationToken;
+
+            if (_study != null && !cancellationToken.IsCancellationRequested)
+            {
+                await _study.StopAsync();
+            }
+
+            if (_multiStudy != null)
+            {
+                foreach (var study in _multiStudy.Studies)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                        break;
+
+                    await study.StopAsync();
+                }
+            }
+        }
+
+
         protected virtual void Dispose(bool disposing)
         {
             if (!_disposed)
@@ -362,7 +400,7 @@ namespace VisualHFT.ViewModel
                                     }
                                     catch (Exception ex)
                                     {
-                                        // Log but continue disposing other children
+                                        // Log but continue disposing of other children
                                         System.Diagnostics.Debug.WriteLine($"Error disposing child tile: {ex.Message}");
                                     }
                                 }

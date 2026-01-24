@@ -42,7 +42,7 @@
                 <StackPanel Orientation="Vertical" Grid.Row="1">
                     <Separator HorizontalAlignment="Stretch"  Height="10" BorderBrush="White"/>
                     <TextBlock Text="{Binding Title}" FontSize="16" Margin="0 0 0 5 " VerticalAlignment="Center" HorizontalAlignment="Center"/>
-                    <TextBlock FontSize="9" Margin="0 0 0 5" Padding="0" VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock Visibility="{Binding FooterVisibility}"  FontSize="9" Margin="0 0 0 5" Padding="0" VerticalAlignment="Center" HorizontalAlignment="Center">
                         <TextBlock.Text>
                             <MultiBinding StringFormat="{}{0}: {1}">
                                 <Binding Path="SelectedProviderName"/>

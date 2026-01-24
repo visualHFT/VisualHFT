@@ -37,6 +37,10 @@ namespace VisualHFT.Commons.PluginManager
         public abstract Action CloseSettingWindow { get; set; }
         public abstract string TileTitle { get; set; }
         public abstract string TileToolTip { get; set; }
+        public bool IsChartButtonVisible { get; set; } = true;
+        public bool IsSettingsButtonVisisble { get; set; } = true;
+        public bool IsFooterVisible { get; set; } = true;
+
         public ePluginType PluginType
         {
             get { return ePluginType.STUDY; }

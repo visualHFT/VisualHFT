@@ -34,9 +34,10 @@
                 </Grid.ColumnDefinitions>
 
                 <!-- Title Label -->
-                <Button Content="⛭"  Grid.Column="0"  VerticalAlignment="Top" HorizontalAlignment="Left" Width="20" Height="20" Margin="0 0 0 0" Padding="0" ToolTip="Settings" Command="{Binding OpenSettingsCommand}" />
+                <Button Content="⛭" Visibility="{Binding SettingButtonVisibility}" Grid.Column="0"  VerticalAlignment="Top" HorizontalAlignment="Left" Width="20" Height="20" Margin="0 0 0 0" Padding="0" ToolTip="Settings" Command="{Binding OpenSettingsCommand}" />
                 <TextBlock Text="{Binding Title}" Grid.Column="0" VerticalAlignment="Center" Margin="25 0 0 0"/>
-                <Button Content="📈" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Right" Width="20" Height="20" Margin="0" Padding="0" ToolTip="Open Chart" Command="{Binding OpenChartCommand}" />
+                <Button Content="📈" Visibility="{Binding ChartButtonVisibility}" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Right" Width="20" Height="20" Margin="0" Padding="0" ToolTip="Open Chart" Command="{Binding OpenChartCommand}" />
+
             </Grid>
         </GroupBox.Header>
 
@@ -59,12 +60,12 @@
                         Visibility="{Binding UCVisibility}" />
             </ScrollViewer>
 
-            <Separator Grid.Row="1" 
+            <Separator Grid.Row="1" Visibility="{Binding FooterVisibility}" 
                      HorizontalAlignment="Stretch" 
                      Height="10" 
                      BorderBrush="White"/>
 
-            <TextBlock Grid.Row="2" 
+            <TextBlock Visibility="{Binding FooterVisibility}" Grid.Row="2" 
                      FontSize="9" 
                      Margin="0 0 0 5" 
                      Padding="0" 

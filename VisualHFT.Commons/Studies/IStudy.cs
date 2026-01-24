@@ -13,7 +13,9 @@ namespace VisualHFT.Commons.Studies
         string TileToolTip { get; set; }
         object GetCustomUI();   //Allow to setup own UI for the plugin
         //using object type because this csproj doesn't support UI
-
+        bool IsChartButtonVisible { get; set; }
+        bool IsSettingsButtonVisisble { get; set; }
+        bool IsFooterVisible { get; set; }
     }
 
 }
