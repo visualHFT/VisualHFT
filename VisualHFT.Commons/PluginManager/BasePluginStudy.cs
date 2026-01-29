@@ -294,7 +294,7 @@ namespace VisualHFT.Commons.PluginManager
         /// <param name="e">The e.</param>
         protected void AddCalculation(BaseStudyModel e)
         {
-            _QUEUE.Add(e);
+            _QUEUE?.Add(e);
         }
 
         private void QUEUE_onReadAction(BaseStudyModel item)
