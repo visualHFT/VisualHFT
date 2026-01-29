@@ -8,8 +8,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="CryptoExchange.Net" Version="10.3.0" />
-    <PackageReference Include="JKorf.Coinbase.Net" Version="3.3.0" />
+    <PackageReference Include="CryptoExchange.Net" Version="10.3.1" />
+    <PackageReference Include="JKorf.Coinbase.Net" Version="3.3.1" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
 
