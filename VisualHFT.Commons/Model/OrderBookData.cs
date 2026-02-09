@@ -8,15 +8,15 @@ namespace VisualHFT.Model
 {
     public class OrderBookData : IResettable, IDisposable
     {
-        // Helper classes for RAII pattern:
-        private sealed class ReadLockReleaser : IDisposable
+        // Zero-allocation RAII lock releasers (structs avoid heap allocation on every lock operation):
+        public readonly struct ReadLockReleaser : IDisposable
         {
             private readonly ReaderWriterLockSlim _lock;
             public ReadLockReleaser(ReaderWriterLockSlim rwLock) => _lock = rwLock;
             public void Dispose() => _lock.ExitReadLock();
         }
 
-        private sealed class WriteLockReleaser : IDisposable
+        public readonly struct WriteLockReleaser : IDisposable
         {
             private readonly ReaderWriterLockSlim _lock;
             public WriteLockReleaser(ReaderWriterLockSlim rwLock) => _lock = rwLock;
@@ -31,16 +31,18 @@ namespace VisualHFT.Model
 
         /// <summary>
         /// Enters a read lock. Use in 'using' statement for automatic cleanup.
+        /// Returns concrete struct type to avoid heap allocation.
         /// </summary>
-        public IDisposable EnterReadLock()
+        public ReadLockReleaser EnterReadLock()
         {
             _rwLock.EnterReadLock();
             return new ReadLockReleaser(_rwLock);
         }
         /// <summary>
         /// Enters a write lock. Use in 'using' statement for automatic cleanup.
+        /// Returns concrete struct type to avoid heap allocation.
         /// </summary>
-        public IDisposable EnterWriteLock()
+        public WriteLockReleaser EnterWriteLock()
         {
             _rwLock.EnterWriteLock();
             return new WriteLockReleaser(_rwLock);
@@ -78,12 +80,16 @@ namespace VisualHFT.Model
         public int MaxDepth { get; set; }
         public double MaximumCummulativeSize { get; set; }
         public double ImbalanceValue { get; set; }
+        /// <summary>
+        /// Gets Top of Book (best bid or ask).
+        /// OPTIMIZATION: Use indexed access [0] instead of FirstOrDefault() to avoid LINQ iterator allocation.
+        /// </summary>
         public BookItem GetTOB(bool isBid)
         {
             if (isBid)
-                return Bids?.FirstOrDefault();
+                return (Bids != null && Bids.Count() > 0) ? Bids[0] : null;
             else
-                return Asks?.FirstOrDefault();
+                return (Asks != null && Asks.Count() > 0) ? Asks[0] : null;
         }
         public double MidPrice
         {
@@ -147,34 +153,37 @@ namespace VisualHFT.Model
             }
             MaximumCummulativeSize = Math.Max(MaximumCummulativeSize, cumSize);
         }
-        public Tuple<double, double> GetMinMaxSizes()
+        public (double min, double max) GetMinMaxSizes()
         {
-            List<BookItem> allOrders = new List<BookItem>();
             double minVal = 0;
             double maxVal = 0;
             if (Asks == null || Bids == null
                              || Asks.Count() == 0
                              || Bids.Count() == 0)
-                return new Tuple<double, double>(0, 0);
+                return (0, 0);
 
-            foreach (var o in Bids)
+            int bidsCount = Bids.Count();
+            for (int i = 0; i < bidsCount; i++)
             {
-                if (o.Size.HasValue)
+                var size = Bids[i].Size;
+                if (size.HasValue)
                 {
-                    minVal = Math.Min(minVal, o.Size.Value);
-                    maxVal = Math.Max(maxVal, o.Size.Value);
+                    minVal = Math.Min(minVal, size.Value);
+                    maxVal = Math.Max(maxVal, size.Value);
                 }
             }
-            foreach (var o in Asks)
+            int asksCount = Asks.Count();
+            for (int i = 0; i < asksCount; i++)
             {
-                if (o.Size.HasValue)
+                var size = Asks[i].Size;
+                if (size.HasValue)
                 {
-                    minVal = Math.Min(minVal, o.Size.Value);
-                    maxVal = Math.Max(maxVal, o.Size.Value);
+                    minVal = Math.Min(minVal, size.Value);
+                    maxVal = Math.Max(maxVal, size.Value);
                 }
             }
 
-            return Tuple.Create(minVal, maxVal);
+            return (minVal, maxVal);
         }
 
         public void Reset()
@@ -189,25 +198,18 @@ namespace VisualHFT.Model
         }
         public void Clear()
         {
-            if (_Asks.Count() > 0)
+            // Return all items to the shared pool, then clear
+            foreach (var item in _Asks)
             {
-                // FIXED: Return to shared pool instead of instance pool
-                foreach (var item in _Asks)
-                {
-                    BookItemPool.Return(item);
-                }
-                _Asks.Clear();
+                BookItemPool.Return(item);
             }
+            _Asks.Clear();
 
-            if (_Bids.Count() > 0)
+            foreach (var item in _Bids)
             {
-                // FIXED: Return to shared pool instead of instance pool
-                foreach (var item in _Bids)
-                {
-                    BookItemPool.Return(item);
-                }
-                _Bids.Clear();
+                BookItemPool.Return(item);
             }
+            _Bids.Clear();
         }
 
 

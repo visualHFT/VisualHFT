@@ -2,10 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.Windows.Threading;
 using VisualHFT.Helpers;
 using VisualHFT.Model;
@@ -25,14 +22,14 @@ namespace VisualHFT.ViewModel
 
         private DispatcherTimer timerUI = new DispatcherTimer();
         private List<PlotInfoPriceChart> _realTimeData;
-        private List<PlotInfoPriceChart> TRACK_RealTimeData = new List<PlotInfoPriceChart>();
+        private volatile bool _hasNewData;
 
         public vmOrderBookFlowAnalysis(Dictionary<string, Func<string, string, bool>> dialogs)
         {
             this._dialogs = dialogs;
             HelperOrderBook.Instance.Subscribe(LIMITORDERBOOK_OnDataReceived);
 
-            timerUI.Interval = TimeSpan.FromMilliseconds(1);
+            timerUI.Interval = TimeSpan.FromMilliseconds(100);
             timerUI.Tick += TimerUI_Tick;
             timerUI.Start();
         }
@@ -50,14 +47,9 @@ namespace VisualHFT.ViewModel
 
         private void TimerUI_Tick(object sender, EventArgs e)
         {
-            var localRealTime = RealTimeData?.ToList();
-
-            if (localRealTime != null && !TRACK_RealTimeData.SequenceEqual(localRealTime))
-            {
-                RaisePropertyChanged(nameof(RealTimeData));
-                TRACK_RealTimeData = localRealTime;
-            }
-
+            if (!_hasNewData) return;
+            _hasNewData = false;
+            RaisePropertyChanged(nameof(RealTimeData));
         }
         private void LIMITORDERBOOK_OnDataReceived(OrderBook e)
         {
@@ -81,11 +73,12 @@ namespace VisualHFT.ViewModel
                 if (_realTimeData != null && _orderBook != null)
                 {
                     //Imbalance
-                    PlotInfoPriceChart objWithHigherDate = _realTimeData.OrderBy(x => x.Date).LastOrDefault();
+                    PlotInfoPriceChart lastItem = _realTimeData.Count > 0 ? _realTimeData[_realTimeData.Count - 1] : null;
                     var objToAdd = new PlotInfoPriceChart() { Date = HelperTimeProvider.Now, Volume = _orderBook.ImbalanceValue, MidPrice = _orderBook.MidPrice };
-                    if (objWithHigherDate == null || objToAdd.Date.Subtract(objWithHigherDate.Date).TotalMilliseconds > 10)
+                    if (lastItem == null || objToAdd.Date.Subtract(lastItem.Date).TotalMilliseconds > 10)
                     {
                         _realTimeData.Add(objToAdd);
+                        _hasNewData = true;
                     }
                     if (_realTimeData.Count > 300) //max chart points = 300
                         _realTimeData.RemoveAt(0);

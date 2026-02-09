@@ -162,7 +162,7 @@ namespace VisualHFT.Model
 
                 int countToCopy = Math.Min(sourceSpan.Length, destination.Length);
 
-                // ✅ DEEP COPY: Get pooled BookItems and copy data (not references)
+                // ✅ OPTIMIZED COPY: Only copy essential per-level fields (Price, Size, IsBid, ActiveSize, CummulativeSize)
                 for (int i = 0; i < countToCopy; i++)
                 {
                     // Reuse existing pooled item if available, otherwise get new one
@@ -171,8 +171,8 @@ namespace VisualHFT.Model
                         destination[i] = BookItemPool.Get();
                     }
 
-                    // Deep copy to ensure snapshot isolation
-                    destination[i].CopyFrom(sourceSpan[i]);
+                    // Optimized copy - only essential fields that vary per level
+                    destination[i].CopyEssentialsFrom(sourceSpan[i]);
                 }
 
                 return countToCopy;
@@ -195,7 +195,7 @@ namespace VisualHFT.Model
 
                 int countToCopy = Math.Min(sourceSpan.Length, destination.Length);
 
-                // ✅ DEEP COPY: Get pooled BookItems and copy data (not references)
+                // ✅ OPTIMIZED COPY: Only copy essential per-level fields (Price, Size, IsBid, ActiveSize, CummulativeSize)
                 for (int i = 0; i < countToCopy; i++)
                 {
                     // Reuse existing pooled item if available, otherwise get new one
@@ -204,8 +204,8 @@ namespace VisualHFT.Model
                         destination[i] = BookItemPool.Get();
                     }
 
-                    // Deep copy to ensure snapshot isolation
-                    destination[i].CopyFrom(sourceSpan[i]);
+                    // Optimized copy - only essential fields that vary per level
+                    destination[i].CopyEssentialsFrom(sourceSpan[i]);
                 }
 
                 return countToCopy;
@@ -315,22 +315,28 @@ namespace VisualHFT.Model
 
                 if (bids != null)
                 {
-                    foreach (var bidItem in bids.Where(x => x != null && x.Price.HasValue && x.Size.HasValue).OrderByDescending(x => x.Price.Value))
+                    foreach (var bidItem in bids)
                     {
+                        if (bidItem == null || !bidItem.Price.HasValue || !bidItem.Size.HasValue)
+                            continue;
                         var pooledItem = BookItemPool.Get();
                         pooledItem.CopyFrom(bidItem);
-                        _data.Bids.Add(pooledItem);
+                        _data.Bids.AddUnsorted(pooledItem);
                     }
+                    _data.Bids.Sort(); // Single sort (descending by price, set in OrderBookData ctor)
                 }
 
                 if (asks != null)
                 {
-                    foreach (var askItem in asks.Where(x => x != null && x.Price.HasValue && x.Size.HasValue).OrderBy(x => x.Price.Value))
+                    foreach (var askItem in asks)
                     {
+                        if (askItem == null || !askItem.Price.HasValue || !askItem.Size.HasValue)
+                            continue;
                         var pooledItem = BookItemPool.Get();
                         pooledItem.CopyFrom(askItem);
-                        _data.Asks.Add(pooledItem);
+                        _data.Asks.AddUnsorted(pooledItem);
                     }
+                    _data.Asks.Sort(); // Single sort (ascending by price, set in OrderBookData ctor)
                 }
 
                 _data.CalculateAccummulated();
@@ -347,14 +353,30 @@ namespace VisualHFT.Model
             using (_data.EnterReadLock())
             {
                 if (_data.Bids != null)
-                    _maxOrderSize = _data.Bids.Where(x => x.Size.HasValue).DefaultIfEmpty(new BookItem()).Max(x => x.Size.Value);
+                {
+                    int bidsCount = _data.Bids.Count();
+                    for (int i = 0; i < bidsCount; i++)
+                    {
+                        var size = _data.Bids[i].Size;
+                        if (size.HasValue && size.Value > _maxOrderSize)
+                            _maxOrderSize = size.Value;
+                    }
+                }
                 if (_data.Asks != null)
-                    _maxOrderSize = Math.Max(_maxOrderSize, _data.Asks.Where(x => x.Size.HasValue).DefaultIfEmpty(new BookItem()).Max(x => x.Size.Value));
+                {
+                    int asksCount = _data.Asks.Count();
+                    for (int i = 0; i < asksCount; i++)
+                    {
+                        var size = _data.Asks[i].Size;
+                        if (size.HasValue && size.Value > _maxOrderSize)
+                            _maxOrderSize = size.Value;
+                    }
+                }
             }
             return _maxOrderSize;
         }
 
-        public Tuple<double, double> GetMinMaxSizes()
+        public (double min, double max) GetMinMaxSizes()
         {
             using (_data.EnterReadLock())
             {
@@ -437,7 +459,6 @@ namespace VisualHFT.Model
                 // Clear existing data and return items to shared pool to avoid allocation
                 _data.Clear();
 
-
                 // Copy asks using shared pooled objects
                 if (asks != null)
                 {
@@ -447,9 +468,10 @@ namespace VisualHFT.Model
                         {
                             var pooledItem = BookItemPool.Get();
                             pooledItem.CopyFrom(askItem);
-                            _data.Asks.Add(pooledItem);
+                            _data.Asks.AddUnsorted(pooledItem);
                         }
                     }
+                    _data.Asks.Sort();
                 }
 
                 // Copy bids using shared pooled objects
@@ -461,9 +483,10 @@ namespace VisualHFT.Model
                         {
                             var pooledItem = BookItemPool.Get();
                             pooledItem.CopyFrom(bidItem);
-                            _data.Bids.Add(pooledItem);
+                            _data.Bids.AddUnsorted(pooledItem);
                         }
                     }
+                    _data.Bids.Sort();
                 }
 
                 // Calculate accumulated sizes
@@ -676,11 +699,13 @@ namespace VisualHFT.Model
             var listCount = list.Count();
             if (IsBid.Value)
             {
-                willNewItemFallOut = listCount > this.MaxDepth && Price < list.Min(x => x.Price);
+                // Bids sorted descending: last element is the minimum price
+                willNewItemFallOut = listCount > this.MaxDepth && Price < list[listCount - 1].Price;
             }
             else
             {
-                willNewItemFallOut = listCount > this.MaxDepth && Price > list.Max(x => x.Price);
+                // Asks sorted ascending: last element is the maximum price
+                willNewItemFallOut = listCount > this.MaxDepth && Price > list[listCount - 1].Price;
             }
 
             if (!willNewItemFallOut)
