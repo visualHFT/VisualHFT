@@ -10,7 +10,7 @@ namespace VisualHFT.Helpers
         private List<T> _cachedReadOnlyCollection;
         private CachedCollection<T> _takeList;
         private Comparison<T> _comparison;
-        
+
         public CachedCollection(IEnumerable<T> initialData = null)
         {
             _internalList = initialData?.ToList() ?? new List<T>();
@@ -71,6 +71,17 @@ namespace VisualHFT.Helpers
                 _cachedReadOnlyCollection = null; // Invalidate the cache
             }
         }
+        /// <summary>
+        /// Adds an item without triggering a sort. Call Sort() after bulk adds.
+        /// </summary>
+        public void AddUnsorted(T item)
+        {
+            lock (_lock)
+            {
+                _internalList.Add(item);
+                _cachedReadOnlyCollection = null;
+            }
+        }
         public bool Remove(T item)
         {
             lock (_lock)
@@ -113,20 +124,21 @@ namespace VisualHFT.Helpers
         {
             lock (_lock)
             {
-                if (_cachedReadOnlyCollection != null)
-                    return _cachedReadOnlyCollection.FirstOrDefault();
-                else
-                    return _internalList.FirstOrDefault();
+                var source = _cachedReadOnlyCollection ?? _internalList;
+                return source.Count > 0 ? source[0] : default;
             }
         }
         public T FirstOrDefault(Func<T, bool> predicate)
         {
             lock (_lock)
             {
-                if (_cachedReadOnlyCollection != null)
-                    return _cachedReadOnlyCollection.FirstOrDefault(predicate);
-                else
-                    return _internalList.FirstOrDefault(predicate);
+                var source = _cachedReadOnlyCollection ?? _internalList;
+                for (int i = 0; i < source.Count; i++)
+                {
+                    if (predicate(source[i]))
+                        return source[i];
+                }
+                return default;
             }
         }
         public CachedCollection<T> Take(int count)
@@ -146,14 +158,14 @@ namespace VisualHFT.Helpers
                 {
                     for (int i = 0; i < Math.Min(count, _cachedReadOnlyCollection.Count); i++)
                     {
-                        _takeList.Add(_cachedReadOnlyCollection[i]);
+                        _takeList.AddUnsorted(_cachedReadOnlyCollection[i]);
                     }
                 }
                 else
                 {
                     for (int i = 0; i < Math.Min(count, _internalList.Count); i++)
                     {
-                        _takeList.Add(_internalList[i]);
+                        _takeList.AddUnsorted(_internalList[i]);
                     }
                 }
 
@@ -251,7 +263,15 @@ namespace VisualHFT.Helpers
         {
             lock (_lock)
             {
-                T itemFound = _internalList.FirstOrDefault(predicate);
+                T itemFound = default;
+                for (int i = 0; i < _internalList.Count; i++)
+                {
+                    if (predicate(_internalList[i]))
+                    {
+                        itemFound = _internalList[i];
+                        break;
+                    }
+                }
                 if (itemFound != null)
                 {
                     //execute actionUpdate
