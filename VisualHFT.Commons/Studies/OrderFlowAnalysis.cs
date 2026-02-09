@@ -107,16 +107,18 @@ namespace VisualHFT.Studies
             A positive order imbalance (more buy orders than sell orders) can indicate upward pressure on prices, while a negative order imbalance (more sell orders than buy orders) can indicate downward pressure on prices.
             */
 
-            if (asks != null && bids != null && asks.Count() > 0 && bids.Count() > 0)
+            int asksCount = asks?.Count() ?? 0;
+            int bidsCount = bids?.Count() ?? 0;
+            if (asksCount > 0 && bidsCount > 0)
             {
                 double totalAskSize = 0;
                 double totalBidSize = 0;
 
                 for (int i = 0; i < _bookDepth; i++)
                 {
-                    if (i < asks.Count())
+                    if (i < asksCount)
                         totalAskSize += asks[i].Size.Value;
-                    if (i < bids.Count())
+                    if (i < bidsCount)
                         totalBidSize += bids[i].Size.Value;
                 }
 
