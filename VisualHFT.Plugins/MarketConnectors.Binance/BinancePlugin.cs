@@ -48,7 +48,6 @@ namespace MarketConnectors.Binance
         private HelperCustomQueue<IBinanceTrade> _tradesBuffers;
         private int pingFailedAttempts = 0;
         private System.Timers.Timer _timerPing;
-        private System.Timers.Timer _timerListenKey;
 
         private CallResult<UpdateSubscription> deltaSubscription;
         private CallResult<UpdateSubscription> tradesSubscription;
@@ -60,7 +59,6 @@ namespace MarketConnectors.Binance
         // ✅ FIX: Use ConcurrentDictionary for thread safety
         private readonly ConcurrentDictionary<string, VisualHFT.Model.Order> _localUserOrders = 
             new ConcurrentDictionary<string, VisualHFT.Model.Order>();
-        private string ListenKey = string.Empty;
 
         public override string Name { get; set; } = "Binance Plugin";
         public override string Version { get; set; } = "1.0.0";
@@ -171,10 +169,6 @@ namespace MarketConnectors.Binance
                 await tradesSubscription.Data.CloseAsync();
             _timerPing?.Stop();
             _timerPing?.Dispose();
-            
-            // ✅ FIX: Dispose _timerListenKey
-            _timerListenKey?.Stop();
-            _timerListenKey?.Dispose();
 
             // ✅ FIX: Dispose queues properly
             try
@@ -351,46 +345,16 @@ namespace MarketConnectors.Binance
             }
             _eventBuffers.ResumeConsumer();
         }
-        private async Task InitializePingForPrivateListenKeys()
-        {
-            _timerListenKey?.Stop();
-            _timerListenKey?.Dispose();
-
-            _timerListenKey = new System.Timers.Timer(1000 * 60 * 30); // Set the interval to 30 minutes for Refreshing Listen Key
-            _timerListenKey.Elapsed += async (sender, e) => await DoRefreshListenKeysAsync();
-            _timerListenKey.AutoReset = true;
-            _timerListenKey.Enabled = true; // Start the timer
-        }
-        private async Task DoRefreshListenKeysAsync()
-        {
-            try
-            {
-                var data = await _socketClient.SpotApi.Account.KeepAliveUserStreamAsync(this.ListenKey);
-            }
-            catch (Exception ex)
-            {
-                LogException(ex, "Error trying to refresh Listen Key.");
-            } 
-        }
         private async Task InitializeUserPrivateOrders()
         {
             if (!string.IsNullOrEmpty(this._settings.ApiKey) && !string.IsNullOrEmpty(this._settings.ApiSecret))
             {
-                var listenKey = await _socketClient.SpotApi.Account.StartUserStreamAsync(CancellationToken.None);
-                if (!listenKey.Success)
-                {
-                    return;
-                }
-
-                this.ListenKey = listenKey.Data.Result;
-                await InitializePingForPrivateListenKeys();
-
                 var openOrders = await _socketClient.SpotApi.Trading.GetOpenOrdersAsync();
                 if (openOrders != null && openOrders.Success)
                 {
                     if(openOrders==null || openOrders.Data==null || openOrders.Data.Result==null || openOrders.Data.Result.Count()==0)
                     {
-                        
+
                     }
                     else
                     {
@@ -401,15 +365,17 @@ namespace MarketConnectors.Binance
                     }
 
                 }
-                await _socketClient.SpotApi.Account.SubscribeToUserDataUpdatesAsync(this.ListenKey, neworder =>
-                { 
-                    log.Info(neworder.Data);
-                    if (neworder.Data != null)
-                    {
-                        BinanceStreamOrderUpdate item = neworder.Data;
-                        UpdateUserOrderBook(item);
-                    }
-                });
+                // Subscribe to user data updates - authentication is handled automatically via websocket  
+                // Note: The new API no longer requires listen keys
+                var subscription = await _socketClient.SpotApi.Account.SubscribeToUserDataUpdatesAsync(
+                    onOrderUpdateMessage: (orderUpdate) =>
+                    { 
+                        log.Info(orderUpdate.Data);
+                        if (orderUpdate.Data != null)
+                        {
+                            UpdateUserOrderBook(orderUpdate.Data);
+                        }
+                    });
             }
         }
 
@@ -885,10 +851,7 @@ namespace MarketConnectors.Binance
                     _socketClient?.Dispose();
                     _restClient?.Dispose();
                     _timerPing?.Dispose();
-                    
-                    // ✅ FIX: Dispose _timerListenKey
-                    _timerListenKey?.Dispose();
-                    
+
                     // ✅ FIX: Dispose semaphore
                     _startStopLock?.Dispose();
 
