@@ -4,7 +4,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using VisualHFT.Commons.Interfaces;
 using VisualHFT.PluginManager;
-using Xunit.Abstractions;
 
 namespace VisualHFT.DataRetriever.TestingFramework.Core
 {

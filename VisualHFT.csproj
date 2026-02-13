@@ -118,7 +118,6 @@
     <ProjectReference Include="..\oxyplot\Source\OxyPlot\OxyPlot.csproj" />
     <ProjectReference Include="VisualHFT.Commons.WPF\VisualHFT.Commons.WPF.csproj" />
     <ProjectReference Include="VisualHFT.Commons\VisualHFT.Commons.csproj" />
-    <ProjectReference Include="VisualHFT.DataRetriever.TestingFramework\VisualHFT.DataRetriever.TestingFramework.csproj" />
     <ProjectReference Include="VisualHFT.Plugins\MarketConnectors.Binance\MarketConnectors.Binance.csproj" />
     <ProjectReference Include="VisualHFT.Plugins\MarketConnectors.Bitfinex\MarketConnectors.Bitfinex.csproj" />
     <ProjectReference Include="VisualHFT.Plugins\MarketConnectors.BitStamp\MarketConnectors.BitStamp.csproj" />
@@ -127,7 +126,6 @@
     <ProjectReference Include="VisualHFT.Plugins\MarketConnectors.Kraken\MarketConnectors.Kraken.csproj" />
     <ProjectReference Include="VisualHFT.Plugins\MarketConnectors.KuCoin\MarketConnectors.KuCoin.csproj" />
     <ProjectReference Include="VisualHFT.Plugins\Studies.LOBImbalance\Studies.LOBImbalance.csproj" />
-    <ProjectReference Include="VisualHFT.Plugins\Studies.MarketResilience.Test\Studies.MarketResilience.Test.csproj" />
     <ProjectReference Include="VisualHFT.Plugins\Studies.MarketResilience\Studies.MarketResilience.csproj" />
     <ProjectReference Include="VisualHFT.Plugins\Studies.OTT_Ratio\Studies.OTT_Ratio.csproj" />
     <ProjectReference Include="VisualHFT.Plugins\Studies.VPIN\Studies.VPIN.csproj" />

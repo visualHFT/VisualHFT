@@ -1,7 +1,6 @@
 ﻿using VisualHFT.Model;
 using VisualHFT.Helpers;
 using VisualHFT.DataRetriever.TestingFramework.Core;
-using Xunit.Abstractions;
 using VisualHFT.PluginManager;
 using VisualHFT.Commons.Interfaces;
 

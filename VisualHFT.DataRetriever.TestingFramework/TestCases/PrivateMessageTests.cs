@@ -4,7 +4,6 @@ using VisualHFT.DataRetriever.TestingFramework.Core;
 using VisualHFT.Enums;
 using VisualHFT.Helpers;
 using VisualHFT.Model;
-using Xunit.Abstractions;
 
 namespace VisualHFT.DataRetriever.TestingFramework.TestCases
 {

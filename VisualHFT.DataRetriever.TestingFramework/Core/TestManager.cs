@@ -8,7 +8,6 @@ using VisualHFT.PluginManager;
 using VisualHFT.Model;
 using VisualHFT.Commons.Helpers;
 using VisualHFT.Helpers;
-using Xunit.Abstractions;
 
 
 namespace VisualHFT.DataRetriever.TestingFramework.Core
@@ -258,6 +257,8 @@ namespace VisualHFT.DataRetriever.TestingFramework.Core
     {
         private readonly StringBuilder _output = new StringBuilder();
 
+        public string Output => throw new NotImplementedException();
+
         public void WriteLine(string message)
         {
             _output.AppendLine($"[{DateTime.Now:HH:mm:ss.fff}] {message}");
@@ -269,5 +270,15 @@ namespace VisualHFT.DataRetriever.TestingFramework.Core
         }
 
         public string GetOutput() => _output.ToString();
+
+        public void Write(string message)
+        {
+            throw new NotImplementedException();
+        }
+
+        public void Write(string format, params object[] args)
+        {
+            throw new NotImplementedException();
+        }
     }
 }
