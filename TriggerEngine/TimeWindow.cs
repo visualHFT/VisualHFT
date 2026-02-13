@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace VisualHFT.TriggerEngine
+﻿namespace VisualHFT.TriggerEngine
 {
     /// <summary>
     /// Optional time-based window for smoothing or sustained condition detection.

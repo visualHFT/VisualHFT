@@ -1,22 +1,13 @@
 ﻿using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reactive;
-using System.Text;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using System.Windows.Media;
-using System.Xml.Linq;
 using VisualHFT.Commons.Helpers;
-using VisualHFT.Helpers;
-using VisualHFT.ViewModel;
-using VisualHFT.ViewModels;
-using Windows.Storage;
 
 namespace VisualHFT.TriggerEngine
 {
@@ -163,7 +154,7 @@ namespace VisualHFT.TriggerEngine
 
         private static void ProcessMetric(MetricEvent e)
         {
-            string metricKey = $"{e.Plugin}.{e.Metric}";
+            string metricKey = $"{e.Plugin}.{e.Metric}.{e.Exchange}.{e.Symbol}";
             var previous = LastMetricValues.ContainsKey(metricKey) ? LastMetricValues[metricKey] : double.NaN;
             LastMetricValues[metricKey] = e.Value;
 
@@ -303,13 +294,13 @@ namespace VisualHFT.TriggerEngine
                 foreach (var kvp in latestMetrics)
                 {
                     var parts = kvp.Key.Split('.');
-                    if (parts.Length != 2)
+                    if (parts.Length != 4)
                         continue;
 
                     var plugin = parts[0];
                     var metric = parts[1];
                     var exchange = parts[2];
-                    var symbol= parts[3];
+                    var symbol = parts[3];
                     var value = kvp.Value;
 
                     var metricEvent = new MetricEvent(plugin, metric, exchange,symbol, value, DateTime.UtcNow);
