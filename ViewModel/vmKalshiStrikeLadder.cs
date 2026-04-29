@@ -19,6 +19,8 @@ namespace VisualHFT.ViewModel
         public string EventTicker { get; set; } = "";
         public string Strike { get; set; } = "";
         public string Category { get; set; } = "";
+        /// <summary>Strike value parsed numerically from the ticker (e.g. T103.99 → 103.99).</summary>
+        public double StrikeNumeric { get; set; }
 
         private double _yesBid;
         public double YesBid
@@ -36,6 +38,31 @@ namespace VisualHFT.ViewModel
 
         public double Spread => Math.Max(0, YesAsk - YesBid);
         public double MidProb => (YesBid > 0 && YesAsk > 0) ? Math.Round((YesBid + YesAsk) / 2.0, 1) : 0;
+
+        // --- Monotonicity / arbitrage flags, set by the scanner ---
+        private double _arbEdgeCents;
+        /// <summary>Largest executable arbitrage edge (cents) involving this strike, across all pairs.
+        /// Positive = free money exists. Computed by the scanner.</summary>
+        public double ArbEdgeCents
+        {
+            get => _arbEdgeCents;
+            set { _arbEdgeCents = value; Notify(nameof(ArbEdgeCents)); Notify(nameof(ArbEdgeText)); Notify(nameof(IsArbExecutable)); Notify(nameof(IsMonotonicityViolation)); }
+        }
+
+        private double _theoMonotonicityGapCents;
+        /// <summary>Mid-price monotonicity gap in cents — positive means *theoretical* violation
+        /// (mid of higher strike exceeds mid of lower strike). Sub-spread, not necessarily executable.</summary>
+        public double TheoMonotonicityGapCents
+        {
+            get => _theoMonotonicityGapCents;
+            set { _theoMonotonicityGapCents = value; Notify(nameof(TheoMonotonicityGapCents)); Notify(nameof(IsMonotonicityViolation)); }
+        }
+
+        public bool IsArbExecutable => ArbEdgeCents > 0.0;
+        public bool IsMonotonicityViolation => IsArbExecutable || TheoMonotonicityGapCents > 0.0;
+        public string ArbEdgeText => IsArbExecutable ? $"+{ArbEdgeCents:F1}¢"
+                                   : TheoMonotonicityGapCents > 0 ? $"~{TheoMonotonicityGapCents:F1}¢"
+                                   : "";
 
         private DateTime _lastUpdate;
         public DateTime LastUpdate
@@ -88,7 +115,52 @@ namespace VisualHFT.ViewModel
                 row.YesBid = topBid;
                 row.YesAsk = topAsk;
                 row.LastUpdate = DateTime.Now;
+
+                // Monotonicity / no-arb scan across this row's event group.
+                ScanArbForEvent(row.EventTicker);
             });
+        }
+
+        /// <summary>
+        /// Scan all strikes of one event for monotonicity violations.
+        /// Two checks per adjacent pair (K_low &lt; K_high):
+        ///   1. Executable arb: yes_ask(K_low) &lt; yes_bid(K_high). Free money = bid_high - ask_low cents.
+        ///   2. Theoretical violation: mid(K_low) &lt; mid(K_high). Sub-spread mispricing.
+        /// Each row's flags = max over all pairs touching that row.
+        /// </summary>
+        private void ScanArbForEvent(string eventTicker)
+        {
+            var group = Strikes.Where(r => r.EventTicker == eventTicker).ToList();
+            if (group.Count < 2) return;
+
+            // Reset
+            foreach (var r in group) { r.ArbEdgeCents = 0; r.TheoMonotonicityGapCents = 0; }
+
+            // Sort ascending by strike
+            group.Sort((a, b) => a.StrikeNumeric.CompareTo(b.StrikeNumeric));
+
+            for (int i = 0; i < group.Count - 1; i++)
+            {
+                var lo = group[i];
+                var hi = group[i + 1];
+                if (lo.YesBid <= 0 || hi.YesBid <= 0) continue;
+
+                // Executable: buy K_low at ask, sell K_high at bid
+                double execEdge = hi.YesBid - lo.YesAsk;
+                if (execEdge > 0)
+                {
+                    if (execEdge > lo.ArbEdgeCents) lo.ArbEdgeCents = execEdge;
+                    if (execEdge > hi.ArbEdgeCents) hi.ArbEdgeCents = execEdge;
+                }
+
+                // Theoretical: mid of K_high should be < mid of K_low
+                double theoGap = hi.MidProb - lo.MidProb;
+                if (theoGap > 0)
+                {
+                    if (theoGap > lo.TheoMonotonicityGapCents) lo.TheoMonotonicityGapCents = theoGap;
+                    if (theoGap > hi.TheoMonotonicityGapCents) hi.TheoMonotonicityGapCents = theoGap;
+                }
+            }
         }
 
         private void InsertSorted(KalshiStrikeRow row)
@@ -111,8 +183,20 @@ namespace VisualHFT.ViewModel
                 Ticker = ticker,
                 EventTicker = evt,
                 Strike = strk,
+                StrikeNumeric = ParseStrikeNumber(strk),
                 Category = CategorizeFromTicker(ticker)
             };
+        }
+
+        /// <summary>Parse the numeric strike value out of a strike token like 'T103.99', 'B82.5', 'T63'.</summary>
+        private static double ParseStrikeNumber(string strikeToken)
+        {
+            if (string.IsNullOrEmpty(strikeToken)) return 0;
+            // Strip any leading non-digit prefix like 'T', 'B', 'L' etc.
+            int i = 0;
+            while (i < strikeToken.Length && !char.IsDigit(strikeToken[i]) && strikeToken[i] != '-' && strikeToken[i] != '.') i++;
+            return double.TryParse(strikeToken.Substring(i), System.Globalization.NumberStyles.Any,
+                                    System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0;
         }
 
         // Map ticker prefix → broad market category. Easy to extend.

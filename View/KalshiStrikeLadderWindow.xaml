@@ -105,6 +105,27 @@
                         </Style>
                     </DataGridTextColumn.ElementStyle>
                 </DataGridTextColumn>
+                <DataGridTextColumn Header="Arb" Binding="{Binding ArbEdgeText}" Width="80">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="HorizontalAlignment" Value="Right"/>
+                            <Setter Property="FontWeight" Value="Bold"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsArbExecutable}" Value="True">
+                                    <Setter Property="Foreground" Value="#FFFF1744"/>
+                                    <Setter Property="Background" Value="#33FF1744"/>
+                                </DataTrigger>
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding IsMonotonicityViolation}" Value="True"/>
+                                        <Condition Binding="{Binding IsArbExecutable}" Value="False"/>
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Foreground" Value="#FFFFD54F"/>
+                                </MultiDataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
                 <DataGridTextColumn Header="Updated" Binding="{Binding LastUpdate, StringFormat='HH:mm:ss'}"  Width="90">
                     <DataGridTextColumn.ElementStyle>
                         <Style TargetType="TextBlock">
