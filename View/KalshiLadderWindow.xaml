@@ -88,9 +88,18 @@
                   RowStyle="{StaticResource AskRow}"
                   ScrollViewer.VerticalScrollBarVisibility="Auto">
             <DataGrid.Columns>
-                <DataGridTextColumn Header="Price"     Binding="{Binding PriceText}"     Width="*"/>
-                <DataGridTextColumn Header="Contracts" Binding="{Binding ContractsText}" Width="*"/>
-                <DataGridTextColumn Header="Total"     Binding="{Binding TotalText}"     Width="*"/>
+                <DataGridTextColumn Header="Price"     Binding="{Binding PriceText}"     Width="80"/>
+                <DataGridTextColumn Header="Contracts" Binding="{Binding ContractsText}" Width="100"/>
+                <DataGridTextColumn Header="Total"     Binding="{Binding TotalText}"     Width="100"/>
+                <DataGridTemplateColumn Header="Depth" Width="*">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Rectangle Fill="#55EF5350" Height="14"
+                                       Width="{Binding BarWidth}"
+                                       HorizontalAlignment="Left"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
             </DataGrid.Columns>
         </DataGrid>
 
@@ -116,9 +125,18 @@
                   RowStyle="{StaticResource BidRow}"
                   ScrollViewer.VerticalScrollBarVisibility="Auto">
             <DataGrid.Columns>
-                <DataGridTextColumn Binding="{Binding PriceText}"     Width="*"/>
-                <DataGridTextColumn Binding="{Binding ContractsText}" Width="*"/>
-                <DataGridTextColumn Binding="{Binding TotalText}"     Width="*"/>
+                <DataGridTextColumn Binding="{Binding PriceText}"     Width="80"/>
+                <DataGridTextColumn Binding="{Binding ContractsText}" Width="100"/>
+                <DataGridTextColumn Binding="{Binding TotalText}"     Width="100"/>
+                <DataGridTemplateColumn Width="*">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Rectangle Fill="#5566BB6A" Height="14"
+                                       Width="{Binding BarWidth}"
+                                       HorizontalAlignment="Left"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
             </DataGrid.Columns>
         </DataGrid>
     </Grid>

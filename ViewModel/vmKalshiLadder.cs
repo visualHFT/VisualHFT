@@ -18,6 +18,7 @@ namespace VisualHFT.ViewModel
         public double Price { get; init; }                   // cents (whole or fractional)
         public double Contracts { get; init; }
         public double CumulativeDollars { get; init; }       // running total walking away from mid
+        public double BarWidth { get; set; }                  // 0..160 (px), proportional to size
         public string PriceText  => $"{Price:F0}¢";
         public string ContractsText => Contracts >= 1000
             ? $"{Contracts:N0}"
@@ -122,6 +123,17 @@ namespace VisualHFT.ViewModel
 
             double bestB = bidsList.Count > 0 ? bidsList[0].price : 0;
             double bestA = asksList.Count > 0 ? asksList[0].price : 0;
+
+            // Set bar widths proportional to the largest contracts size on either side.
+            const double MAX_BAR_PX = 160.0;
+            double maxQ = 0;
+            foreach (var r in newAskRows) maxQ = Math.Max(maxQ, r.Contracts);
+            foreach (var r in newBidRows) maxQ = Math.Max(maxQ, r.Contracts);
+            if (maxQ > 0)
+            {
+                foreach (var r in newAskRows) r.BarWidth = (r.Contracts / maxQ) * MAX_BAR_PX;
+                foreach (var r in newBidRows) r.BarWidth = (r.Contracts / maxQ) * MAX_BAR_PX;
+            }
 
             Application.Current?.Dispatcher.BeginInvoke(() =>
             {
