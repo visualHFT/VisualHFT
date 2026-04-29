@@ -45,7 +45,8 @@
             </StackPanel>
         </Border>
 
-        <DataGrid ItemsSource="{Binding Strikes}"
+        <DataGrid x:Name="StrikesGrid"
+                  ItemsSource="{Binding Strikes}"
                   AutoGenerateColumns="False"
                   CanUserAddRows="False"
                   CanUserDeleteRows="False"
@@ -57,7 +58,8 @@
                   HeadersVisibility="Column"
                   Background="#FF1E1E1E"
                   BorderThickness="0"
-                  AlternationCount="2">
+                  AlternationCount="2"
+                  MouseDoubleClick="StrikesGrid_MouseDoubleClick">
             <DataGrid.Columns>
                 <DataGridTextColumn Header="Event"   Binding="{Binding EventTicker}" Width="200" />
                 <DataGridTextColumn Header="Strike"  Binding="{Binding Strike}"      Width="80" />

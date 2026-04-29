@@ -1,0 +1,125 @@
+<Window x:Class="VisualHFT.View.KalshiLadderWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="{Binding WindowTitle}"
+        Height="720" Width="520"
+        Background="#FF1A1A1A"
+        TextElement.Foreground="White"
+        FontFamily="Consolas"
+        FontSize="14">
+    <Window.Resources>
+        <Style TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#FF252526"/>
+            <Setter Property="Foreground" Value="#FF999999"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="HorizontalContentAlignment" Value="Right"/>
+        </Style>
+        <Style TargetType="DataGridCell">
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="6,2"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="HorizontalContentAlignment" Value="Right"/>
+        </Style>
+        <Style x:Key="AskRow" TargetType="DataGridRow">
+            <Setter Property="Background" Value="#1FFF4444"/>
+            <Setter Property="Foreground" Value="#FFEF5350"/>
+        </Style>
+        <Style x:Key="BidRow" TargetType="DataGridRow">
+            <Setter Property="Background" Value="#1F44FF66"/>
+            <Setter Property="Foreground" Value="#FF66BB6A"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>     <!-- header -->
+            <RowDefinition Height="*"/>         <!-- asks -->
+            <RowDefinition Height="Auto"/>     <!-- mid divider -->
+            <RowDefinition Height="*"/>         <!-- bids -->
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Border Grid.Row="0" Background="#FF252526" Padding="14,10">
+            <StackPanel>
+                <TextBlock Text="{Binding Symbol}" FontSize="16" FontWeight="Bold" Foreground="White"/>
+                <Grid Margin="0,8,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.Column="0" Background="#1F66BB6A" Padding="10,6" Margin="0,0,4,0" CornerRadius="4">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="YES " Foreground="#FFAAAAAA" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding BestBidText}" Foreground="#FF66BB6A" FontWeight="Bold" FontSize="20" Margin="6,0,0,0"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Column="1" Background="#1FEF5350" Padding="10,6" Margin="4,0,0,0" CornerRadius="4">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="NO " Foreground="#FFAAAAAA" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding NoBidText}" Foreground="#FFEF5350" FontWeight="Bold" FontSize="20" Margin="6,0,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                    <TextBlock Text="Mid: " Foreground="#FF999999"/>
+                    <TextBlock Text="{Binding MidPrice}" Foreground="#FFFFD54F" FontWeight="Bold"/>
+                    <TextBlock Text="    " Foreground="#FF999999"/>
+                    <TextBlock Text="{Binding SpreadText}" Foreground="#FF999999"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- Asks (top half) -->
+        <DataGrid Grid.Row="1"
+                  ItemsSource="{Binding Asks}"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  IsReadOnly="True"
+                  HeadersVisibility="Column"
+                  GridLinesVisibility="None"
+                  Background="#FF1A1A1A"
+                  BorderThickness="0"
+                  RowStyle="{StaticResource AskRow}"
+                  ScrollViewer.VerticalScrollBarVisibility="Auto">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Price"     Binding="{Binding PriceText}"     Width="*"/>
+                <DataGridTextColumn Header="Contracts" Binding="{Binding ContractsText}" Width="*"/>
+                <DataGridTextColumn Header="Total"     Binding="{Binding TotalText}"     Width="*"/>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- Mid divider -->
+        <Border Grid.Row="2" Background="#FF2D2D30" BorderBrush="#FF444444" BorderThickness="0,1" Padding="14,6">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                <TextBlock Text="Mid " Foreground="#FFAAAAAA" VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding MidPrice}" Foreground="#FFFFD54F" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Bids (bottom half) -->
+        <DataGrid Grid.Row="3"
+                  ItemsSource="{Binding Bids}"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  IsReadOnly="True"
+                  HeadersVisibility="None"
+                  GridLinesVisibility="None"
+                  Background="#FF1A1A1A"
+                  BorderThickness="0"
+                  RowStyle="{StaticResource BidRow}"
+                  ScrollViewer.VerticalScrollBarVisibility="Auto">
+            <DataGrid.Columns>
+                <DataGridTextColumn Binding="{Binding PriceText}"     Width="*"/>
+                <DataGridTextColumn Binding="{Binding ContractsText}" Width="*"/>
+                <DataGridTextColumn Binding="{Binding TotalText}"     Width="*"/>
+            </DataGrid.Columns>
+        </DataGrid>
+    </Grid>
+</Window>
