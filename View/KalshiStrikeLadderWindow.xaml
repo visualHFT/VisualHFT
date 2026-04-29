@@ -61,9 +61,17 @@
                   AlternationCount="2"
                   MouseDoubleClick="StrikesGrid_MouseDoubleClick">
             <DataGrid.Columns>
-                <DataGridTextColumn Header="Event"   Binding="{Binding EventTicker}" Width="200" />
+                <DataGridTextColumn Header="Cat"     Binding="{Binding Category}"    Width="90">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="#FF8AB4F8"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="Event"   Binding="{Binding EventTicker}" Width="180" />
                 <DataGridTextColumn Header="Strike"  Binding="{Binding Strike}"      Width="80" />
-                <DataGridTextColumn Header="Ticker"  Binding="{Binding Ticker}"      Width="220" />
+                <DataGridTextColumn Header="Ticker"  Binding="{Binding Ticker}"      Width="200" />
                 <DataGridTextColumn Header="YES Bid" Binding="{Binding YesBid, StringFormat='{}{0:F1}¢'}"  Width="80">
                     <DataGridTextColumn.ElementStyle>
                         <Style TargetType="TextBlock">

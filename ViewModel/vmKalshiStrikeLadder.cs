@@ -18,6 +18,7 @@ namespace VisualHFT.ViewModel
         public string Ticker { get; set; } = "";
         public string EventTicker { get; set; } = "";
         public string Strike { get; set; } = "";
+        public string Category { get; set; } = "";
 
         private double _yesBid;
         public double YesBid
@@ -105,7 +106,36 @@ namespace VisualHFT.ViewModel
             int lastDash = ticker.LastIndexOf('-');
             string evt = lastDash > 0 ? ticker.Substring(0, lastDash) : ticker;
             string strk = lastDash > 0 ? ticker.Substring(lastDash + 1) : "";
-            return new KalshiStrikeRow { Ticker = ticker, EventTicker = evt, Strike = strk };
+            return new KalshiStrikeRow
+            {
+                Ticker = ticker,
+                EventTicker = evt,
+                Strike = strk,
+                Category = CategorizeFromTicker(ticker)
+            };
+        }
+
+        // Map ticker prefix → broad market category. Easy to extend.
+        private static string CategorizeFromTicker(string ticker)
+        {
+            string t = ticker.ToUpperInvariant();
+            if (t.StartsWith("KXHIGH") || t.StartsWith("KXLOW") ||
+                t.StartsWith("KXSNOW") || t.StartsWith("KXRAIN") ||
+                t.StartsWith("KXTEMP")) return "Weather";
+            if (t.StartsWith("KXNBA") || t.StartsWith("KXNFL") || t.StartsWith("KXMLB") ||
+                t.StartsWith("KXNHL") || t.StartsWith("KXMLS") || t.StartsWith("KXUFC") ||
+                t.StartsWith("KXTENNIS")) return "Sports";
+            if (t.StartsWith("KXBTC") || t.StartsWith("KXETH") || t.StartsWith("KXSOL") ||
+                t.StartsWith("KXCRYPTO")) return "Crypto";
+            if (t.StartsWith("KXWTI") || t.StartsWith("KXBRENT") ||
+                t.StartsWith("KXNGAS") || t.StartsWith("KXGOLD")) return "Commodities";
+            if (t.StartsWith("KXFED") || t.StartsWith("KXRATE") ||
+                t.StartsWith("KXCPI") || t.StartsWith("KXJOBS") || t.StartsWith("KXGDP")) return "Rates/Macro";
+            if (t.StartsWith("KXSENATE") || t.StartsWith("KXPRES") ||
+                t.StartsWith("KXHOUSE") || t.StartsWith("KXELECT")) return "Politics";
+            if (t.StartsWith("KXSP500") || t.StartsWith("KXNASDAQ") ||
+                t.StartsWith("KXDOW")) return "Equities";
+            return "Other";
         }
 
         private static bool IsKalshiTicker(string s) =>
