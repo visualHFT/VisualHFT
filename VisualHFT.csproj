@@ -126,9 +126,15 @@
     <ProjectReference Include="VisualHFT.Plugins\MarketConnectors.Kraken\MarketConnectors.Kraken.csproj" />
     <ProjectReference Include="VisualHFT.Plugins\MarketConnectors.KuCoin\MarketConnectors.KuCoin.csproj" />
     <ProjectReference Include="VisualHFT.Plugins\Studies.LOBImbalance\Studies.LOBImbalance.csproj" />
+    <!-- Disabled for Kalshi build — these are designed for continuous markets and produce
+         meaningless values on binary contracts (toxic-flow / informed-trader detection):
     <ProjectReference Include="VisualHFT.Plugins\Studies.MarketResilience\Studies.MarketResilience.csproj" />
     <ProjectReference Include="VisualHFT.Plugins\Studies.OTT_Ratio\Studies.OTT_Ratio.csproj" />
     <ProjectReference Include="VisualHFT.Plugins\Studies.VPIN\Studies.VPIN.csproj" />
+    -->
+    <None Remove="VisualHFT.Plugins\Studies.MarketResilience\**" />
+    <None Remove="VisualHFT.Plugins\Studies.OTT_Ratio\**" />
+    <None Remove="VisualHFT.Plugins\Studies.VPIN\**" />
   </ItemGroup>
 
   <ItemGroup>

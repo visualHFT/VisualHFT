@@ -467,10 +467,15 @@ namespace VisualHFT.ViewModel
             CummulativeAsksChartModel.PlotAreaBorderColor = OxyColors.White;
             CummulativeAsksChartModel.PlotAreaBorderThickness = new OxyThickness(0);
 
+            // Kalshi: lock cumulative-depth X axes to 0-100 cents (binary-contract probability axis).
+            // Comment out Minimum/Maximum to restore auto-scaling for continuous-price markets.
             var xAxis = new OxyPlot.Axes.LinearAxis
             {
                 Position = AxisPosition.Bottom,
-                StringFormat = "N", // Format time as hours:minutes:seconds
+                StringFormat = "N0",
+                Title = "YES price (¢)",
+                Minimum = 0,
+                Maximum = 100,
                 FontSize = 8,
                 AxislineColor = OxyColors.White,
                 TicklineColor = OxyColors.White,
@@ -494,7 +499,10 @@ namespace VisualHFT.ViewModel
             var xAxis2 = new OxyPlot.Axes.LinearAxis
             {
                 Position = AxisPosition.Bottom,
-                StringFormat = "N", // Format time as hours:minutes:seconds
+                StringFormat = "N0",
+                Title = "YES price (¢)",
+                Minimum = 0,
+                Maximum = 100,
                 FontSize = 8,
                 AxislineColor = OxyColors.White,
                 TicklineColor = OxyColors.White,
