@@ -73,11 +73,21 @@ namespace VisualHFT.Helpers
             {
                 if (string.IsNullOrWhiteSpace(t) || !t.StartsWith("KX", StringComparison.OrdinalIgnoreCase))
                     continue;
-                _books.TryAdd(t, new OrderBook(t, priceDecimalPlaces: 0, maxDepth: 50)
+                bool added = _books.TryAdd(t, new OrderBook(t, priceDecimalPlaces: 0, maxDepth: 50)
                 {
                     ProviderID = KalshiProviderId,
                     ProviderName = KalshiProviderName
                 });
+                // Register the symbol with VisualHFT's central symbol registry so it
+                // appears in the Provider/Symbol dropdown immediately — even before
+                // the first poll lands. This is what the plugin's RaiseOnDataReceived
+                // does automatically; we have to do it ourselves since we publish
+                // straight to HelperOrderBook.
+                if (added)
+                {
+                    try { HelperSymbol.Instance.UpdateData(t); }
+                    catch (Exception ex) { log.Warn($"HelperSymbol register {t}: {ex.Message}"); }
+                }
             }
         }
 
