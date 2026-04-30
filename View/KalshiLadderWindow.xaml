@@ -41,6 +41,7 @@
             <RowDefinition Height="*"/>         <!-- asks -->
             <RowDefinition Height="Auto"/>     <!-- mid divider -->
             <RowDefinition Height="*"/>         <!-- bids -->
+            <RowDefinition Height="Auto"/>     <!-- order panel -->
         </Grid.RowDefinitions>
 
         <!-- Header -->
@@ -141,5 +142,32 @@
                 </DataGridTemplateColumn>
             </DataGrid.Columns>
         </DataGrid>
+
+        <!-- Order panel -->
+        <Border Grid.Row="4" Background="#FF252526" BorderBrush="#FF444444" BorderThickness="0,1,0,0" Padding="14,10">
+            <StackPanel>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="DEMO ORDER" Foreground="#FFFFD54F" FontWeight="Bold" VerticalAlignment="Center"/>
+                    <TextBlock Text="(safety-capped at 5 contracts/order)" Foreground="#FF777777" FontSize="10" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <ComboBox x:Name="OrderSide" Width="60" SelectedIndex="0" Margin="0,0,6,0">
+                        <ComboBoxItem Content="YES"/>
+                        <ComboBoxItem Content="NO"/>
+                    </ComboBox>
+                    <ComboBox x:Name="OrderAction" Width="70" SelectedIndex="0" Margin="0,0,6,0">
+                        <ComboBoxItem Content="Buy"/>
+                        <ComboBoxItem Content="Sell"/>
+                    </ComboBox>
+                    <TextBlock Text="@" Foreground="#FF999999" VerticalAlignment="Center" Margin="2,0"/>
+                    <TextBox x:Name="OrderPrice" Width="48" Text="50" VerticalAlignment="Center" Margin="0,0,2,0"/>
+                    <TextBlock Text="¢ ×" Foreground="#FF999999" VerticalAlignment="Center" Margin="2,0"/>
+                    <TextBox x:Name="OrderCount" Width="40" Text="1" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <Button x:Name="OrderSubmit" Content="Submit" Width="80" Background="#FF1565C0" Foreground="White" BorderThickness="0" Click="OrderSubmit_Click"/>
+                    <Button x:Name="OrderCancelLast" Content="Cancel last" Width="100" Margin="6,0,0,0" Background="#FFB71C1C" Foreground="White" BorderThickness="0" Click="OrderCancelLast_Click" IsEnabled="False"/>
+                </StackPanel>
+                <TextBlock x:Name="OrderStatus" Text="" Foreground="#FF999999" Margin="0,8,0,0" TextWrapping="Wrap"/>
+            </StackPanel>
+        </Border>
     </Grid>
 </Window>
