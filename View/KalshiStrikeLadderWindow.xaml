@@ -63,7 +63,9 @@
             <DataGrid.ContextMenu>
                 <ContextMenu>
                     <MenuItem Header="📊 Show implied PMF for this event" Click="ShowPMF_Click"/>
-                    <MenuItem Header="📈 Open ladder for this market" Click="OpenLadder_Click"/>
+                    <MenuItem Header="📈 Open kalshi.com-style ladder window" Click="OpenLadder_Click"/>
+                    <Separator/>
+                    <MenuItem Header="📉 Load this ticker into main chart"   Click="LoadInMainChart_Click"/>
                 </ContextMenu>
             </DataGrid.ContextMenu>
             <DataGrid.Columns>

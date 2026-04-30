@@ -1,5 +1,7 @@
+using System;
 using System.Windows;
 using System.Windows.Input;
+using VisualHFT.Helpers;
 using VisualHFT.ViewModel;
 
 namespace VisualHFT.View
@@ -43,6 +45,12 @@ namespace VisualHFT.View
                 var pmf = new KalshiPMFWindow(row.EventTicker);
                 pmf.Show();
             }
+        }
+
+        private void LoadInMainChart_Click(object sender, RoutedEventArgs e)
+        {
+            if (StrikesGrid.SelectedItem is KalshiStrikeRow row && !string.IsNullOrEmpty(row.Ticker))
+                KalshiViewRequest.Show(row.Ticker, KalshiBrowserPoller.KalshiProviderId);
         }
     }
 }

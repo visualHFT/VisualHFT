@@ -53,8 +53,22 @@ namespace VisualHFT.Helpers
         private readonly Task _loop;
         private bool _disposed;
 
-        // 1Hz to keep total req/s reasonable when many events are watched
-        private const int PollMs = 1000;
+        // 1Hz baseline. Scaled up automatically when many tickers are watched
+        // so total req/s stays within Kalshi's basic-tier ceiling (~10/s read).
+        // See ComputeLoopDelayMs().
+        private const int PollMsBase = 1000;
+        private const int TargetReqPerSec = 8;   // headroom under the 10/s nominal cap
+
+        private int ComputeLoopDelayMs()
+        {
+            // Each loop iteration polls every watched ticker once + (optionally) one
+            // trade-tape call. So req/s ≈ (n_books + 1) * (1000 / loopMs).
+            // Keep that under TargetReqPerSec.
+            int n = _books.Count + (string.IsNullOrEmpty(_focusedTicker) ? 0 : 1);
+            if (n <= 0) return PollMsBase;
+            int needed = (int)Math.Ceiling((double)n * 1000.0 / TargetReqPerSec);
+            return Math.Max(PollMsBase, needed);
+        }
 
         private KalshiBrowserPoller()
         {
@@ -127,7 +141,8 @@ namespace VisualHFT.Helpers
                     catch (Exception ex) { log.Warn($"trades {focus}: {ex.Message}"); }
                 }
 
-                try { await Task.Delay(PollMs, _cts.Token); }
+                int delay = ComputeLoopDelayMs();
+                try { await Task.Delay(delay, _cts.Token); }
                 catch { return; }
             }
         }
