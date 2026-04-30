@@ -10,8 +10,9 @@ using log4net;
 
 namespace VisualHFT.Helpers
 {
-    /// <summary>One row in the catalog — what /events returns per event.</summary>
-    public sealed class KalshiEventInfo
+    /// <summary>One row in the catalog — what /events returns per event,
+    /// plus liquidity aggregates filled in later from /markets.</summary>
+    public sealed class KalshiEventInfo : System.ComponentModel.INotifyPropertyChanged
     {
         public string EventTicker { get; init; } = "";
         public string SeriesTicker { get; init; } = "";
@@ -20,6 +21,28 @@ namespace VisualHFT.Helpers
         public string Category { get; init; } = "Other";
         public bool MutuallyExclusive { get; init; }
         public string LastUpdated { get; init; } = "";
+
+        // Filled in by FetchAllMarketsAsync after events load — aggregated over the event's markets.
+        private double _oi;
+        public double OpenInterest
+        {
+            get => _oi;
+            set { _oi = value; PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(OpenInterest))); PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(OpenInterestText))); }
+        }
+        public string OpenInterestText =>
+            OpenInterest <= 0       ? ""
+          : OpenInterest >= 1_000_000 ? $"{OpenInterest/1_000_000:F1}M"
+          : OpenInterest >= 1_000     ? $"{OpenInterest/1_000:F1}K"
+          : $"{OpenInterest:F0}";
+
+        private int _markets;
+        public int MarketCount
+        {
+            get => _markets;
+            set { _markets = value; PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(MarketCount))); }
+        }
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     }
 
     /// <summary>
@@ -207,6 +230,66 @@ namespace VisualHFT.Helpers
                 }
             }
             return tickers;
+        }
+
+        /// <summary>
+        /// Fetch every active market and aggregate open_interest_fp per event.
+        /// Used by the events browser to sort categories by liquidity.
+        /// Throttled + retry-on-429 like FetchAllOpenAsync.
+        /// </summary>
+        public async Task<Dictionary<string, (double oi, int markets)>> FetchEventLiquidityAsync(int maxPages = 200)
+        {
+            var byEvent = new Dictionary<string, (double oi, int markets)>(StringComparer.Ordinal);
+            string cursor = "";
+            int pages = 0;
+            while (pages < maxPages)
+            {
+                if (pages > 0) await Task.Delay(200).ConfigureAwait(false);
+
+                var qs = "/trade-api/v2/markets?status=active&limit=200" +
+                         (string.IsNullOrEmpty(cursor) ? "" : $"&cursor={Uri.EscapeDataString(cursor)}");
+                using var req = BuildRequest(HttpMethod.Get, "/trade-api/v2/markets");
+                using var get = new HttpRequestMessage(HttpMethod.Get, qs);
+                CopyAuth(req, get);
+
+                using var resp = await _http.SendAsync(get).ConfigureAwait(false);
+                var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                if ((int)resp.StatusCode == 429)
+                {
+                    log.Warn($"markets page {pages}: 429 — backing off 2s");
+                    await Task.Delay(2000).ConfigureAwait(false);
+                    continue; // retry same cursor
+                }
+                if (!resp.IsSuccessStatusCode)
+                {
+                    log.Warn($"markets page {pages}: {(int)resp.StatusCode}");
+                    break;
+                }
+
+                using var doc = JsonDocument.Parse(body);
+                if (doc.RootElement.TryGetProperty("markets", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var m in arr.EnumerateArray())
+                    {
+                        var ev = m.TryGetProperty("event_ticker", out var et) ? et.GetString() ?? "" : "";
+                        if (string.IsNullOrEmpty(ev)) continue;
+                        double oi = 0;
+                        if (m.TryGetProperty("open_interest_fp", out var oiEl))
+                        {
+                            var s = oiEl.GetString();
+                            if (!string.IsNullOrEmpty(s) && double.TryParse(s, System.Globalization.NumberStyles.Any,
+                                    System.Globalization.CultureInfo.InvariantCulture, out var p)) oi = p;
+                        }
+                        var cur = byEvent.TryGetValue(ev, out var v) ? v : (0.0, 0);
+                        byEvent[ev] = (cur.Item1 + oi, cur.Item2 + 1);
+                    }
+                }
+                cursor = doc.RootElement.TryGetProperty("cursor", out var cu) ? cu.GetString() ?? "" : "";
+                pages++;
+                if (string.IsNullOrEmpty(cursor)) break;
+            }
+            log.Info($"event liquidity: {byEvent.Count} events covered across {pages} markets-page(s)");
+            return byEvent;
         }
 
         public void Dispose()

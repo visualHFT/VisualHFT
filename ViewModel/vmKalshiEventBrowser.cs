@@ -72,6 +72,45 @@ namespace VisualHFT.ViewModel
                 TotalEvents = events.Count;
                 IsLoading = false;
             });
+
+            // Kick off the markets fetch in the background — once done, attach OI
+            // per event and resort each category by liquidity desc.
+            _ = Task.Run(() => LoadLiquidityAsync(events));
+        }
+
+        private async Task LoadLiquidityAsync(List<KalshiEventInfo> events)
+        {
+            try
+            {
+                using var cat = KalshiEventCatalog.ForProd();
+                var liq = await cat.FetchEventLiquidityAsync().ConfigureAwait(false);
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    foreach (var e in events)
+                    {
+                        if (liq.TryGetValue(e.EventTicker, out var v))
+                        {
+                            e.OpenInterest = v.oi;
+                            e.MarketCount = v.markets;
+                        }
+                    }
+                    // Resort each category by OI desc, ticker asc as tiebreaker
+                    foreach (var bucket in Groups)
+                    {
+                        var sorted = bucket.Events
+                            .OrderByDescending(x => x.OpenInterest)
+                            .ThenBy(x => x.EventTicker)
+                            .ToList();
+                        bucket.Events.Clear();
+                        foreach (var e in sorted) bucket.Events.Add(e);
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                // Non-fatal — events stay listed, just unsorted by liquidity
+                System.Diagnostics.Debug.WriteLine($"liquidity load failed: {ex.Message}");
+            }
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;

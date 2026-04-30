@@ -66,6 +66,23 @@
                               Background="#FF1A1A1A"
                               BorderThickness="0">
                         <DataGrid.Columns>
+                            <DataGridTextColumn Header="OI"            Binding="{Binding OpenInterestText}" Width="80">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="#FFFFD54F"/>
+                                        <Setter Property="FontWeight" Value="Bold"/>
+                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="Mkts"          Binding="{Binding MarketCount}" Width="50">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="#FF999999"/>
+                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
                             <DataGridTextColumn Header="Event Ticker"  Binding="{Binding EventTicker}"  Width="220">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
@@ -74,8 +91,8 @@
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
-                            <DataGridTextColumn Header="Series"        Binding="{Binding SeriesTicker}" Width="160"/>
-                            <DataGridTextColumn Header="Title"         Binding="{Binding Title}"        Width="400"/>
+                            <DataGridTextColumn Header="Series"        Binding="{Binding SeriesTicker}" Width="140"/>
+                            <DataGridTextColumn Header="Title"         Binding="{Binding Title}"        Width="380"/>
                             <DataGridTextColumn Header="Sub-title"     Binding="{Binding SubTitle}"     Width="*"/>
                         </DataGrid.Columns>
                     </DataGrid>
