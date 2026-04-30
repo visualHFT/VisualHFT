@@ -35,17 +35,14 @@
         </Style>
     </Window.Resources>
 
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>     <!-- header -->
-            <RowDefinition Height="*" MinHeight="120"/>     <!-- asks region (bottom-aligned content) -->
-            <RowDefinition Height="Auto"/>     <!-- mid divider -->
-            <RowDefinition Height="*" MinHeight="120"/>     <!-- bids region (top-aligned content) -->
-            <RowDefinition Height="Auto"/>     <!-- order panel -->
-        </Grid.RowDefinitions>
+    <DockPanel LastChildFill="True">
+        <!-- Layout: header on top, order panel pinned to bottom, ladder fills
+             the middle. The ladder is a single ScrollViewer holding asks ->
+             mid divider -> bids in a stack so the data clusters around the mid
+             without huge empty regions when the book is sparse. -->
 
         <!-- Header -->
-        <Border Grid.Row="0" Background="#FF252526" Padding="14,10">
+        <Border DockPanel.Dock="Top" Background="#FF252526" Padding="14,10">
             <StackPanel>
                 <TextBlock Text="{Binding Symbol}" FontSize="16" FontWeight="Bold" Foreground="White"/>
                 <Grid Margin="0,8,0,0">
@@ -75,80 +72,8 @@
             </StackPanel>
         </Border>
 
-        <!-- Asks (top half). VerticalAlignment=Bottom + MaxHeight pushes the
-             rendered rows to the bottom of this region (right above the Mid
-             divider) when the book is sparse — kalshi.com layout. -->
-        <DataGrid Grid.Row="1"
-                  x:Name="AsksGrid"
-                  ItemsSource="{Binding Asks}"
-                  AutoGenerateColumns="False"
-                  CanUserAddRows="False"
-                  CanUserDeleteRows="False"
-                  IsReadOnly="True"
-                  VerticalAlignment="Bottom"
-                  MaxHeight="320"
-                  HeadersVisibility="Column"
-                  GridLinesVisibility="None"
-                  Background="#FF1A1A1A"
-                  BorderThickness="0"
-                  RowStyle="{StaticResource AskRow}"
-                  ScrollViewer.VerticalScrollBarVisibility="Auto">
-            <DataGrid.Columns>
-                <DataGridTextColumn Header="Price"     Binding="{Binding PriceText}"     Width="80"/>
-                <DataGridTextColumn Header="Contracts" Binding="{Binding ContractsText}" Width="100"/>
-                <DataGridTextColumn Header="Total"     Binding="{Binding TotalText}"     Width="100"/>
-                <DataGridTemplateColumn Header="Depth" Width="*">
-                    <DataGridTemplateColumn.CellTemplate>
-                        <DataTemplate>
-                            <Rectangle Fill="#55EF5350" Height="14"
-                                       Width="{Binding BarWidth}"
-                                       HorizontalAlignment="Left"/>
-                        </DataTemplate>
-                    </DataGridTemplateColumn.CellTemplate>
-                </DataGridTemplateColumn>
-            </DataGrid.Columns>
-        </DataGrid>
-
-        <!-- Mid divider -->
-        <Border Grid.Row="2" Background="#FF2D2D30" BorderBrush="#FF444444" BorderThickness="0,1" Padding="14,6">
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                <TextBlock Text="Mid " Foreground="#FFAAAAAA" VerticalAlignment="Center"/>
-                <TextBlock Text="{Binding MidPrice}" Foreground="#FFFFD54F" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
-            </StackPanel>
-        </Border>
-
-        <!-- Bids (bottom half) -->
-        <DataGrid Grid.Row="3"
-                  x:Name="BidsGrid"
-                  ItemsSource="{Binding Bids}"
-                  AutoGenerateColumns="False"
-                  CanUserAddRows="False"
-                  CanUserDeleteRows="False"
-                  IsReadOnly="True"
-                  HeadersVisibility="None"
-                  GridLinesVisibility="None"
-                  Background="#FF1A1A1A"
-                  BorderThickness="0"
-                  RowStyle="{StaticResource BidRow}"
-                  ScrollViewer.VerticalScrollBarVisibility="Auto">
-            <DataGrid.Columns>
-                <DataGridTextColumn Binding="{Binding PriceText}"     Width="80"/>
-                <DataGridTextColumn Binding="{Binding ContractsText}" Width="100"/>
-                <DataGridTextColumn Binding="{Binding TotalText}"     Width="100"/>
-                <DataGridTemplateColumn Width="*">
-                    <DataGridTemplateColumn.CellTemplate>
-                        <DataTemplate>
-                            <Rectangle Fill="#5566BB6A" Height="14"
-                                       Width="{Binding BarWidth}"
-                                       HorizontalAlignment="Left"/>
-                        </DataTemplate>
-                    </DataGridTemplateColumn.CellTemplate>
-                </DataGridTemplateColumn>
-            </DataGrid.Columns>
-        </DataGrid>
-
-        <!-- Order panel -->
-        <Border Grid.Row="4" Background="#FF252526" BorderBrush="#FF444444" BorderThickness="0,1,0,0" Padding="14,10">
+        <!-- Order panel pinned to the bottom of the window -->
+        <Border DockPanel.Dock="Bottom" Background="#FF252526" BorderBrush="#FF444444" BorderThickness="0,1,0,0" Padding="14,10">
             <StackPanel>
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="DEMO ORDER" Foreground="#FFFFD54F" FontWeight="Bold" VerticalAlignment="Center"/>
@@ -167,11 +92,84 @@
                     <TextBox x:Name="OrderPrice" Width="48" Text="50" VerticalAlignment="Center" Margin="0,0,2,0"/>
                     <TextBlock Text="¢ ×" Foreground="#FF999999" VerticalAlignment="Center" Margin="2,0"/>
                     <TextBox x:Name="OrderCount" Width="40" Text="1" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <Button x:Name="OrderSubmit" Content="Submit" Width="80" Background="#FF1565C0" Foreground="White" BorderThickness="0" Click="OrderSubmit_Click"/>
-                    <Button x:Name="OrderCancelLast" Content="Cancel last" Width="100" Margin="6,0,0,0" Background="#FFB71C1C" Foreground="White" BorderThickness="0" Click="OrderCancelLast_Click" IsEnabled="False"/>
+                    <Button x:Name="OrderSubmit" Content="Submit" Width="90" Padding="6,2" Background="#FF1565C0" Foreground="White" BorderThickness="0" Click="OrderSubmit_Click"/>
+                    <Button x:Name="OrderCancelLast" Content="Cancel last" Width="120" Padding="6,2" Margin="6,0,0,0" Background="#FFB71C1C" Foreground="White" BorderThickness="0" Click="OrderCancelLast_Click" IsEnabled="False"/>
                 </StackPanel>
                 <TextBlock x:Name="OrderStatus" Text="" Foreground="#FF999999" Margin="0,8,0,0" TextWrapping="Wrap"/>
             </StackPanel>
         </Border>
-    </Grid>
+
+        <!-- Ladder body — single scrollable stack: asks, mid divider, bids.
+             Compact when book is sparse, scrolls when deep. Mirrors kalshi.com. -->
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Background="#FF1A1A1A">
+            <StackPanel>
+        <DataGrid x:Name="AsksGrid"
+                  ItemsSource="{Binding Asks}"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  IsReadOnly="True"
+                  HeadersVisibility="Column"
+                  GridLinesVisibility="None"
+                  Background="#FF1A1A1A"
+                  BorderThickness="0"
+                  RowStyle="{StaticResource AskRow}"
+                  ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                  ScrollViewer.CanContentScroll="False">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Price"     Binding="{Binding PriceText}"     Width="80"/>
+                <DataGridTextColumn Header="Contracts" Binding="{Binding ContractsText}" Width="100"/>
+                <DataGridTextColumn Header="Total"     Binding="{Binding TotalText}"     Width="100"/>
+                <DataGridTemplateColumn Header="Depth" Width="*">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Rectangle Fill="#55EF5350" Height="14"
+                                       Width="{Binding BarWidth}"
+                                       HorizontalAlignment="Left"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- Mid divider -->
+        <Border Background="#FF2D2D30" BorderBrush="#FF444444" BorderThickness="0,1" Padding="14,6">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                <TextBlock Text="Mid " Foreground="#FFAAAAAA" VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding MidPrice}" Foreground="#FFFFD54F" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Bids (bottom). Same compact stack pattern as asks. -->
+        <DataGrid x:Name="BidsGrid"
+                  ItemsSource="{Binding Bids}"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  IsReadOnly="True"
+                  HeadersVisibility="None"
+                  GridLinesVisibility="None"
+                  Background="#FF1A1A1A"
+                  BorderThickness="0"
+                  RowStyle="{StaticResource BidRow}"
+                  ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                  ScrollViewer.CanContentScroll="False">
+            <DataGrid.Columns>
+                <DataGridTextColumn Binding="{Binding PriceText}"     Width="80"/>
+                <DataGridTextColumn Binding="{Binding ContractsText}" Width="100"/>
+                <DataGridTextColumn Binding="{Binding TotalText}"     Width="100"/>
+                <DataGridTemplateColumn Width="*">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Rectangle Fill="#5566BB6A" Height="14"
+                                       Width="{Binding BarWidth}"
+                                       HorizontalAlignment="Left"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
 </Window>
