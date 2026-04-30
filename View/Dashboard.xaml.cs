@@ -60,6 +60,12 @@ namespace VisualHFT
             form.Show();
         }
 
+        private void ButtonKalshiBrowser_Click(object sender, RoutedEventArgs e)
+        {
+            var form = new View.KalshiEventBrowserWindow();
+            form.Show();
+        }
+
         private void ButtonPluginManagement_Click(object sender, RoutedEventArgs e)
         {
             var form = new View.PluginManagerWindow();
