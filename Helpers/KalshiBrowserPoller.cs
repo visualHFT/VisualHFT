@@ -44,6 +44,9 @@ namespace VisualHFT.Helpers
         public static KalshiBrowserPoller Instance => _instance.Value;
 
         private readonly ConcurrentDictionary<string, OrderBook> _books = new();
+        // Tracks the most-recently-seen trade_id per ticker so we only push new trades.
+        private readonly ConcurrentDictionary<string, HashSet<string>> _seenTradeIds = new();
+        private string? _focusedTicker;   // Trade tape only fires for the actively viewed ticker
         private readonly HttpClient _http;
         private readonly RSA _rsa;
         private readonly CancellationTokenSource _cts = new();
@@ -61,6 +64,11 @@ namespace VisualHFT.Helpers
                 _rsa.ImportFromPem(File.ReadAllText(ProdPemPath));
             else
                 log.Warn($"BrowserPoller: prod PEM not found at {ProdPemPath} — polling will fail");
+
+            // When the user picks a ticker (Watch List, Strike Ladder, Browser),
+            // remember it so the trade-tape poll fires for that ticker.
+            KalshiViewRequest.OnRequest += (sym, _) => _focusedTicker = sym;
+
             _loop = Task.Run(LoopAsync);
             log.Info("KalshiBrowserPoller started");
         }
@@ -108,8 +116,94 @@ namespace VisualHFT.Helpers
                     catch (OperationCanceledException) { return; }
                     catch (Exception ex) { log.Warn($"poll {kv.Key}: {ex.Message}"); }
                 }
+                // Trade tape: fetch recent trades for the currently focused ticker
+                // (the one in the main Provider/Symbol view). Avoids polling trades
+                // for all 100+ watched tickers and blowing past the rate limit.
+                var focus = _focusedTicker;
+                if (!string.IsNullOrEmpty(focus))
+                {
+                    try { await PollTradesAsync(focus); }
+                    catch (OperationCanceledException) { return; }
+                    catch (Exception ex) { log.Warn($"trades {focus}: {ex.Message}"); }
+                }
+
                 try { await Task.Delay(PollMs, _cts.Token); }
                 catch { return; }
+            }
+        }
+
+        private async Task PollTradesAsync(string ticker)
+        {
+            var path = "/trade-api/v2/markets/trades";
+            using var req = BuildRequest(HttpMethod.Get, path, $"?ticker={Uri.EscapeDataString(ticker)}&limit=20");
+            using var resp = await _http.SendAsync(req, _cts.Token).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return;
+            var body = await resp.Content.ReadAsStringAsync(_cts.Token).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("trades", out var arr) || arr.ValueKind != JsonValueKind.Array)
+                return;
+
+            var seen = _seenTradeIds.GetOrAdd(ticker, _ => new HashSet<string>());
+            // Iterate oldest -> newest by reversing (Kalshi returns newest first)
+            var pending = new List<Trade>();
+            foreach (var t in arr.EnumerateArray())
+            {
+                var tradeId = t.TryGetProperty("trade_id", out var idEl) ? idEl.GetString() ?? "" : "";
+                if (string.IsNullOrEmpty(tradeId)) continue;
+                lock (seen) { if (!seen.Add(tradeId)) continue; }
+
+                double yesPrice = 0;
+                if (t.TryGetProperty("yes_price_dollars", out var ypEl)
+                    && double.TryParse(ypEl.GetString(), System.Globalization.NumberStyles.Any,
+                                        System.Globalization.CultureInfo.InvariantCulture, out var yp))
+                    yesPrice = yp * 100.0;
+
+                double count = 0;
+                if (t.TryGetProperty("count_fp", out var cEl)
+                    && double.TryParse(cEl.GetString(), System.Globalization.NumberStyles.Any,
+                                        System.Globalization.CultureInfo.InvariantCulture, out var cv))
+                    count = cv;
+
+                bool isBuy = t.TryGetProperty("taker_side", out var sEl)
+                          && string.Equals(sEl.GetString(), "yes", StringComparison.OrdinalIgnoreCase);
+
+                DateTime ts = DateTime.UtcNow;
+                if (t.TryGetProperty("created_time", out var ctEl)
+                    && DateTimeOffset.TryParse(ctEl.GetString(), out var dto))
+                    ts = dto.LocalDateTime;
+
+                pending.Add(new Trade
+                {
+                    Symbol = ticker,
+                    ProviderId = KalshiProviderId,
+                    ProviderName = KalshiProviderName,
+                    Price = (decimal)yesPrice,
+                    Size = (decimal)count,
+                    IsBuy = isBuy,
+                    Timestamp = ts,
+                });
+            }
+            // pending is newest-first; reverse so the tape grows in time-order
+            pending.Reverse();
+            foreach (var trade in pending)
+            {
+                try { HelperTrade.Instance.UpdateData(trade); }
+                catch (Exception ex) { log.Warn($"HelperTrade.UpdateData {ticker}: {ex.Message}"); }
+            }
+
+            // Cap memory: keep at most last 200 trade-ids per ticker
+            lock (seen)
+            {
+                if (seen.Count > 400)
+                {
+                    seen.Clear();
+                    foreach (var t in arr.EnumerateArray())
+                    {
+                        var id = t.TryGetProperty("trade_id", out var idEl) ? idEl.GetString() ?? "" : "";
+                        if (!string.IsNullOrEmpty(id)) seen.Add(id);
+                    }
+                }
             }
         }
 
