@@ -36,18 +36,43 @@ namespace VisualHFT.ViewModel
     /// <summary>
     /// View-model for the Watch List window. Backs the KalshiBrowserPoller's
     /// dynamic ticker set with a UI for inspect / add / remove. Subscribes to
-    /// HelperOrderBook so prices stay live.
+    /// HelperOrderBook so prices stay live. Supports text search across
+    /// ticker + event ticker.
     /// </summary>
     public sealed class vmKalshiWatchList : INotifyPropertyChanged, IDisposable
     {
         public ObservableCollection<WatchListRow> Rows { get; } = new();
+        public System.ComponentModel.ICollectionView FilteredRows { get; }
         private readonly ConcurrentDictionary<string, WatchListRow> _byTicker = new();
         private readonly Action<OrderBook> _handler;
+
+        private string _search = "";
+        public string Search
+        {
+            get => _search;
+            set
+            {
+                _search = value ?? "";
+                Notify(nameof(Search));
+                FilteredRows.Refresh();
+            }
+        }
 
         public vmKalshiWatchList()
         {
             _handler = OnBook;
             HelperOrderBook.Instance.Subscribe(_handler);
+
+            FilteredRows = System.Windows.Data.CollectionViewSource.GetDefaultView(Rows);
+            FilteredRows.Filter = obj =>
+            {
+                if (string.IsNullOrWhiteSpace(_search)) return true;
+                if (obj is not WatchListRow r) return true;
+                var s = _search.Trim();
+                return r.Ticker.Contains(s, StringComparison.OrdinalIgnoreCase)
+                    || r.EventTicker.Contains(s, StringComparison.OrdinalIgnoreCase);
+            };
+
             // Seed with anything currently watched
             foreach (var t in KalshiBrowserPoller.Instance.WatchedTickers)
                 EnsureRow(t);
@@ -105,6 +130,7 @@ namespace VisualHFT.ViewModel
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
+        private void Notify(string p) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(p));
         public void Dispose() => HelperOrderBook.Instance.Unsubscribe(_handler);
     }
 }

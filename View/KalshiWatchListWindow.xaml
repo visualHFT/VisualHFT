@@ -37,17 +37,21 @@
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                     <TextBlock Text="Add ticker:" Foreground="#FFAAAAAA" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                    <TextBox x:Name="AddInput" Width="280" VerticalAlignment="Center" Margin="0,0,6,0"
+                    <TextBox x:Name="AddInput" Width="240" VerticalAlignment="Center" Margin="0,0,6,0"
                              ToolTip="e.g. KXWTI-26APR30-T107.99 — single ticker; double-click events in 📁 Browser to add a whole event"/>
-                    <Button x:Name="AddBtn" Content="Add" Width="80" Padding="6,2" Background="#FF1565C0" Foreground="White" BorderThickness="0" Click="AddBtn_Click"/>
-                    <TextBlock Text="  Total watched: " Foreground="#FF999999" VerticalAlignment="Center" Margin="20,0,0,0"/>
+                    <Button x:Name="AddBtn" Content="Add" Width="60" Padding="6,2" Background="#FF1565C0" Foreground="White" BorderThickness="0" Click="AddBtn_Click"/>
+                    <TextBlock Text="    🔍 Search:" Foreground="#FFAAAAAA" VerticalAlignment="Center" Margin="20,0,6,0"/>
+                    <TextBox x:Name="SearchInput" Width="240" VerticalAlignment="Center"
+                             Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="Filter by ticker or event ticker — type any substring"/>
+                    <TextBlock Text="    Total: " Foreground="#FF999999" VerticalAlignment="Center" Margin="20,0,0,0"/>
                     <TextBlock Text="{Binding Rows.Count}" Foreground="#FFFFD54F" FontWeight="Bold" VerticalAlignment="Center"/>
                 </StackPanel>
             </StackPanel>
         </Border>
 
         <DataGrid x:Name="WatchGrid"
-                  ItemsSource="{Binding Rows}"
+                  ItemsSource="{Binding FilteredRows}"
                   AutoGenerateColumns="False"
                   CanUserAddRows="False"
                   CanUserDeleteRows="False"
@@ -60,7 +64,15 @@
                   BorderThickness="0"
                   MouseDoubleClick="WatchGrid_MouseDoubleClick"
                   Cursor="Hand"
-                  ToolTip="Double-click a row to load its chart in the main view">
+                  ToolTip="Double-click → load in main chart. Right-click for more options.">
+            <DataGrid.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="📊 Open kalshi.com-style ladder window" Click="OpenLadder_Click"/>
+                    <MenuItem Header="📈 Load in main chart"                  Click="LoadInMainChart_Click"/>
+                    <Separator/>
+                    <MenuItem Header="❌ Remove from Watch List"               Click="RemoveCtx_Click"/>
+                </ContextMenu>
+            </DataGrid.ContextMenu>
             <DataGrid.Columns>
                 <DataGridTextColumn Header="Ticker"      Binding="{Binding Ticker}"      Width="240">
                     <DataGridTextColumn.ElementStyle>

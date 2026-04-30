@@ -42,5 +42,26 @@ namespace VisualHFT.View
             if (WatchGrid.SelectedItem is WatchListRow row && !string.IsNullOrEmpty(row.Ticker))
                 KalshiViewRequest.Show(row.Ticker, KalshiBrowserPoller.KalshiProviderId);
         }
+
+        private void OpenLadder_Click(object sender, RoutedEventArgs e)
+        {
+            if (WatchGrid.SelectedItem is WatchListRow row && !string.IsNullOrEmpty(row.Ticker))
+            {
+                var ladder = new KalshiLadderWindow(row.Ticker);
+                ladder.Show();
+            }
+        }
+
+        private void LoadInMainChart_Click(object sender, RoutedEventArgs e)
+        {
+            if (WatchGrid.SelectedItem is WatchListRow row && !string.IsNullOrEmpty(row.Ticker))
+                KalshiViewRequest.Show(row.Ticker, KalshiBrowserPoller.KalshiProviderId);
+        }
+
+        private void RemoveCtx_Click(object sender, RoutedEventArgs e)
+        {
+            if (WatchGrid.SelectedItem is WatchListRow row)
+                _vm.Remove(row);
+        }
     }
 }
