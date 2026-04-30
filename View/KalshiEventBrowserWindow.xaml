@@ -65,6 +65,14 @@
                               HorizontalGridLinesBrush="#FF2D2D30"
                               Background="#FF1A1A1A"
                               BorderThickness="0">
+                        <DataGrid.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="📋 Add to Watch List (no chart)" Click="AddToWatchList_Click"/>
+                                <MenuItem Header="📊 Watch + Load Chart"           Click="WatchAndLoadChart_Click"/>
+                                <Separator/>
+                                <MenuItem Header="📁 Show all markets in Strike Ladder" Click="ShowInStrikeLadder_Click"/>
+                            </ContextMenu>
+                        </DataGrid.ContextMenu>
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="OI"            Binding="{Binding OpenInterestText}" SortMemberPath="OpenInterest" Width="80">
                                 <DataGridTextColumn.ElementStyle>

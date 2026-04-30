@@ -48,10 +48,11 @@ namespace VisualHFT.View
             if (dep is not DataGridRow row || row.Item is not KalshiEventInfo evt) return;
             if (string.IsNullOrEmpty(evt.EventTicker)) return;
 
-            await WatchEventAsync(evt);
+            // Plain double-click keeps current behavior: watch + auto-load chart.
+            await WatchEventAsync(evt, loadChart: true);
         }
 
-        private async Task WatchEventAsync(KalshiEventInfo evt)
+        private async Task WatchEventAsync(KalshiEventInfo evt, bool loadChart)
         {
             this.Title = $"Kalshi — Events Browser  •  Loading markets for {evt.EventTicker}…";
             try
@@ -67,18 +68,70 @@ namespace VisualHFT.View
                 int total = KalshiBrowserPoller.Instance.WatchedTickers.Count;
                 this.Title = $"Kalshi — Events Browser  •  Watching {markets.Count} markets from {evt.EventTicker} (total: {total})";
 
-                // Auto-load the first market into the main chart so the user
-                // sees something immediately on double-click. They can pick a
-                // different strike from the dropdown after.
-                var first = markets.FirstOrDefault(m => !string.IsNullOrEmpty(m));
-                if (first != null)
-                    KalshiViewRequest.Show(first, KalshiBrowserPoller.KalshiProviderId);
+                if (loadChart)
+                {
+                    // Auto-load the first market into the main chart.
+                    var first = markets.FirstOrDefault(m => !string.IsNullOrEmpty(m));
+                    if (first != null)
+                        KalshiViewRequest.Show(first, KalshiBrowserPoller.KalshiProviderId);
+                }
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Failed to watch {evt.EventTicker}:\n\n{ex.Message}",
                     "Events Browser", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
+        }
+
+        private async void AddToWatchList_Click(object sender, RoutedEventArgs e)
+        {
+            var evt = SelectedEvent();
+            if (evt != null) await WatchEventAsync(evt, loadChart: false);
+        }
+
+        private async void WatchAndLoadChart_Click(object sender, RoutedEventArgs e)
+        {
+            var evt = SelectedEvent();
+            if (evt != null) await WatchEventAsync(evt, loadChart: true);
+        }
+
+        private async void ShowInStrikeLadder_Click(object sender, RoutedEventArgs e)
+        {
+            var evt = SelectedEvent();
+            if (evt == null) return;
+            await WatchEventAsync(evt, loadChart: false);
+            // Open / focus the strike ladder so the user can see all strikes side-by-side
+            try
+            {
+                var ladder = new View.KalshiStrikeLadderWindow();
+                ladder.Show();
+            }
+            catch { /* best effort */ }
+        }
+
+        /// <summary>Find the KalshiEventInfo for the currently-selected row across any tab.</summary>
+        private KalshiEventInfo? SelectedEvent()
+        {
+            // The TabControl's SelectedContent is the per-category DataGrid; selected row lives there.
+            var content = GroupsTabs?.SelectedContent;
+            if (content is FrameworkElement fe)
+            {
+                var grid = FindDescendant<DataGrid>(fe);
+                if (grid?.SelectedItem is KalshiEventInfo evt) return evt;
+            }
+            return null;
+        }
+
+        private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
+        {
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            {
+                var c = VisualTreeHelper.GetChild(root, i);
+                if (c is T match) return match;
+                var deeper = FindDescendant<T>(c);
+                if (deeper != null) return deeper;
+            }
+            return null;
         }
     }
 }
