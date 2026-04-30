@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -65,6 +66,13 @@ namespace VisualHFT.View
                 KalshiBrowserPoller.Instance.Watch(markets);
                 int total = KalshiBrowserPoller.Instance.WatchedTickers.Count;
                 this.Title = $"Kalshi — Events Browser  •  Watching {markets.Count} markets from {evt.EventTicker} (total: {total})";
+
+                // Auto-load the first market into the main chart so the user
+                // sees something immediately on double-click. They can pick a
+                // different strike from the dropdown after.
+                var first = markets.FirstOrDefault(m => !string.IsNullOrEmpty(m));
+                if (first != null)
+                    KalshiViewRequest.Show(first, KalshiBrowserPoller.KalshiProviderId);
             }
             catch (Exception ex)
             {
