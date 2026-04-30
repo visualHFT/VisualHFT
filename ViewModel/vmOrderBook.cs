@@ -242,6 +242,11 @@ namespace VisualHFT.ViewModel
             HelperTrade.Instance.Subscribe(TRADES_OnDataReceived);
             HelperOrderBook.Instance.Subscribe(LIMITORDERBOOK_OnDataReceived);
 
+            // Cross-window navigation: Watch List / Strike Ladder / Events Browser
+            // fire KalshiViewRequest.Show(symbol, providerId) when the user
+            // double-clicks a row. We honor it by selecting that provider+symbol
+            // here so the chart on the right populates.
+            VisualHFT.Helpers.KalshiViewRequest.OnRequest += OnKalshiViewRequested;
 
             _BidTOB_SPLIT = new Model.BookItemPriceSplit();
             _AskTOB_SPLIT = new Model.BookItemPriceSplit();
@@ -260,6 +265,24 @@ namespace VisualHFT.ViewModel
         ~vmOrderBook()
         {
             Dispose(false);
+        }
+
+        private void OnKalshiViewRequested(string symbol, int providerId)
+        {
+            try
+            {
+                Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    var prov = _providers?.FirstOrDefault(p => p.ProviderID == providerId);
+                    if (prov != null && SelectedProvider != prov) SelectedProvider = prov;
+                    if (!string.IsNullOrEmpty(symbol) && SelectedSymbol != symbol)
+                    {
+                        if (!_symbols.Contains(symbol)) _symbols.Add(symbol);
+                        SelectedSymbol = symbol;
+                    }
+                }));
+            }
+            catch { /* best-effort, never crash on view request */ }
         }
 
         private void InitializeRealTimePriceChart()

@@ -57,7 +57,10 @@
                   GridLinesVisibility="Horizontal"
                   HorizontalGridLinesBrush="#FF2D2D30"
                   Background="#FF1A1A1A"
-                  BorderThickness="0">
+                  BorderThickness="0"
+                  MouseDoubleClick="WatchGrid_MouseDoubleClick"
+                  Cursor="Hand"
+                  ToolTip="Double-click a row to load its chart in the main view">
             <DataGrid.Columns>
                 <DataGridTextColumn Header="Ticker"      Binding="{Binding Ticker}"      Width="240">
                     <DataGridTextColumn.ElementStyle>

@@ -1,5 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using VisualHFT.Helpers;
 using VisualHFT.ViewModel;
 
 namespace VisualHFT.View
@@ -33,6 +35,12 @@ namespace VisualHFT.View
         {
             if (sender is Button b && b.DataContext is WatchListRow row)
                 _vm.Remove(row);
+        }
+
+        private void WatchGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+        {
+            if (WatchGrid.SelectedItem is WatchListRow row && !string.IsNullOrEmpty(row.Ticker))
+                KalshiViewRequest.Show(row.Ticker, KalshiBrowserPoller.KalshiProviderId);
         }
     }
 }

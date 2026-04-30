@@ -69,27 +69,30 @@ namespace VisualHFT.Helpers
 
         public void Watch(IEnumerable<string> tickers)
         {
+            int registeredCount = 0;
             foreach (var t in tickers)
             {
                 // Kalshi has plenty of non-KX tickers (CONTROLH, GOVPARTY*, EUEXIT, …).
                 // Just require non-empty and reasonably ticker-like.
                 if (string.IsNullOrWhiteSpace(t) || t.Length < 3) continue;
-                bool added = _books.TryAdd(t, new OrderBook(t, priceDecimalPlaces: 0, maxDepth: 50)
+                _books.TryAdd(t, new OrderBook(t, priceDecimalPlaces: 0, maxDepth: 50)
                 {
                     ProviderID = KalshiProviderId,
                     ProviderName = KalshiProviderName
                 });
-                // Register the symbol with VisualHFT's central symbol registry so it
-                // appears in the Provider/Symbol dropdown immediately — even before
-                // the first poll lands. This is what the plugin's RaiseOnDataReceived
-                // does automatically; we have to do it ourselves since we publish
-                // straight to HelperOrderBook.
-                if (added)
+                // Always re-register with HelperSymbol — it dedupes internally and
+                // raises OnCollectionChanged only on the first add. Calling it
+                // unconditionally keeps the dropdown in sync even if the user
+                // double-clicks the same event twice or restarts a session.
+                try
                 {
-                    try { HelperSymbol.Instance.UpdateData(t); }
-                    catch (Exception ex) { log.Warn($"HelperSymbol register {t}: {ex.Message}"); }
+                    bool wasNew = !HelperSymbol.Instance.Contains(t);
+                    HelperSymbol.Instance.UpdateData(t);
+                    if (wasNew) registeredCount++;
                 }
+                catch (Exception ex) { log.Warn($"HelperSymbol register {t}: {ex.Message}"); }
             }
+            log.Info($"Watch: +{registeredCount} new symbol(s); total watched = {_books.Count}");
         }
 
         public void Unwatch(string ticker) => _books.TryRemove(ticker, out _);
