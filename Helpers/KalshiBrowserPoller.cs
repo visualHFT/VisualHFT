@@ -279,6 +279,58 @@ namespace VisualHFT.Helpers
             catch (Exception ex) { log.Warn($"UpdateData {ticker}: {ex.Message}"); }
         }
 
+        /// <summary>
+        /// Human-readable metadata for a single Kalshi market. Filled lazily by
+        /// <see cref="GetMarketInfoAsync"/> from <c>/markets/{ticker}</c>. All
+        /// fields default to empty so callers can render fallbacks safely.
+        /// </summary>
+        public sealed record KalshiMarketInfo(string Title, string Subtitle, string YesSubTitle);
+
+        // Process-wide cache: ladders typically reopen the same handful of
+        // tickers, and these strings don't change for the life of a market.
+        private static readonly ConcurrentDictionary<string, KalshiMarketInfo> _marketInfoCache = new();
+
+        /// <summary>
+        /// Resolve a ticker's title / subtitle / yes-side label. Returns a
+        /// best-effort result (empty fields on auth/network failure) — never
+        /// throws — so the caller can fall back to the raw ticker.
+        /// </summary>
+        public async Task<KalshiMarketInfo> GetMarketInfoAsync(string ticker, CancellationToken ct = default)
+        {
+            if (string.IsNullOrWhiteSpace(ticker)) return new KalshiMarketInfo("", "", "");
+            if (_marketInfoCache.TryGetValue(ticker, out var cached)) return cached;
+
+            var path = $"/trade-api/v2/markets/{ticker}";
+            try
+            {
+                using var req = BuildRequest(HttpMethod.Get, path, "");
+                using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    log.Warn($"GetMarketInfo {ticker}: {(int)resp.StatusCode}");
+                    return new KalshiMarketInfo("", "", "");
+                }
+                var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                using var doc = JsonDocument.Parse(body);
+                if (!doc.RootElement.TryGetProperty("market", out var m))
+                    return new KalshiMarketInfo("", "", "");
+
+                string title    = m.TryGetProperty("title",         out var t) ? t.GetString() ?? "" : "";
+                string subtitle = m.TryGetProperty("subtitle",      out var s) ? s.GetString() ?? "" : "";
+                string yesSub   = m.TryGetProperty("yes_sub_title", out var y) ? y.GetString() ?? "" : "";
+
+                var info = new KalshiMarketInfo(title, subtitle, yesSub);
+                _marketInfoCache[ticker] = info;
+                return info;
+            }
+            catch (OperationCanceledException) { return new KalshiMarketInfo("", "", ""); }
+            catch (Exception ex)
+            {
+                log.Warn($"GetMarketInfo {ticker}: {ex.Message}");
+                return new KalshiMarketInfo("", "", "");
+            }
+        }
+
         private HttpRequestMessage BuildRequest(HttpMethod method, string pathToSign, string queryString)
         {
             var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
