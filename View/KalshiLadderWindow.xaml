@@ -38,9 +38,9 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>     <!-- header -->
-            <RowDefinition Height="*"/>         <!-- asks -->
+            <RowDefinition Height="*" MinHeight="120"/>     <!-- asks region (bottom-aligned content) -->
             <RowDefinition Height="Auto"/>     <!-- mid divider -->
-            <RowDefinition Height="*"/>         <!-- bids -->
+            <RowDefinition Height="*" MinHeight="120"/>     <!-- bids region (top-aligned content) -->
             <RowDefinition Height="Auto"/>     <!-- order panel -->
         </Grid.RowDefinitions>
 
@@ -75,7 +75,9 @@
             </StackPanel>
         </Border>
 
-        <!-- Asks (top half) -->
+        <!-- Asks (top half). VerticalAlignment=Bottom + MaxHeight pushes the
+             rendered rows to the bottom of this region (right above the Mid
+             divider) when the book is sparse — kalshi.com layout. -->
         <DataGrid Grid.Row="1"
                   x:Name="AsksGrid"
                   ItemsSource="{Binding Asks}"
@@ -83,6 +85,8 @@
                   CanUserAddRows="False"
                   CanUserDeleteRows="False"
                   IsReadOnly="True"
+                  VerticalAlignment="Bottom"
+                  MaxHeight="320"
                   HeadersVisibility="Column"
                   GridLinesVisibility="None"
                   Background="#FF1A1A1A"
