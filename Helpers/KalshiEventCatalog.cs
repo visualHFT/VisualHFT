@@ -246,7 +246,9 @@ namespace VisualHFT.Helpers
             {
                 if (pages > 0) await Task.Delay(200).ConfigureAwait(false);
 
-                var qs = "/trade-api/v2/markets?status=active&limit=200" +
+                // status=open is the valid value (Kalshi 400s on 'active'). 'open'
+                // covers active markets — closed/settled markets contribute no live OI.
+                var qs = "/trade-api/v2/markets?status=open&limit=200" +
                          (string.IsNullOrEmpty(cursor) ? "" : $"&cursor={Uri.EscapeDataString(cursor)}");
                 using var req = BuildRequest(HttpMethod.Get, "/trade-api/v2/markets");
                 using var get = new HttpRequestMessage(HttpMethod.Get, qs);

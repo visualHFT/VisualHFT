@@ -71,8 +71,9 @@ namespace VisualHFT.Helpers
         {
             foreach (var t in tickers)
             {
-                if (string.IsNullOrWhiteSpace(t) || !t.StartsWith("KX", StringComparison.OrdinalIgnoreCase))
-                    continue;
+                // Kalshi has plenty of non-KX tickers (CONTROLH, GOVPARTY*, EUEXIT, …).
+                // Just require non-empty and reasonably ticker-like.
+                if (string.IsNullOrWhiteSpace(t) || t.Length < 3) continue;
                 bool added = _books.TryAdd(t, new OrderBook(t, priceDecimalPlaces: 0, maxDepth: 50)
                 {
                     ProviderID = KalshiProviderId,

@@ -96,7 +96,9 @@ namespace VisualHFT.ViewModel
         {
             if (ob is null) return;
             var symbol = ob.Symbol;
-            if (!IsKalshiTicker(symbol)) return;
+            // Filter by Kalshi provider id (100) instead of KX prefix — real Kalshi
+            // tickers like CONTROLH-2026, GOVPARTY*, EUEXIT, etc. don't start with KX.
+            if (ob.ProviderID != 100 && !IsKalshiTicker(symbol)) return;
 
             // Snapshot top-of-book outside the UI thread
             var bids = ob.Bids;
