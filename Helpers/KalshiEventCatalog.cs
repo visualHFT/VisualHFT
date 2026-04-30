@@ -57,30 +57,45 @@ namespace VisualHFT.Helpers
             return new KalshiEventCatalog(ProdBase, ProdKeyId, rsa);
         }
 
+        // Process-wide cache + lock so reopening the browser is instant and we don't
+        // re-hammer Kalshi. Cleared by the user's Refresh button.
+        private static readonly object _cacheLock = new();
+        private static List<KalshiEventInfo>? _cachedEvents;
+        private static DateTime _cachedAt;
+
+        public static void InvalidateCache()
+        {
+            lock (_cacheLock) { _cachedEvents = null; }
+        }
+
         /// <summary>
         /// Fetch every open event, paging until the server returns no cursor.
-        /// Capped at <paramref name="maxPages"/> as a safety belt.
+        /// Throttled (200ms between pages) and resilient to 429 (exponential
+        /// backoff up to 5 retries per page). Cached process-wide for ~5 min.
         /// </summary>
         public async Task<List<KalshiEventInfo>> FetchAllOpenAsync(int maxPages = 50)
         {
+            // Serve from cache if it's fresh.
+            lock (_cacheLock)
+            {
+                if (_cachedEvents != null && (DateTime.UtcNow - _cachedAt).TotalMinutes < 5)
+                {
+                    log.Info($"event catalog: serving {_cachedEvents.Count} from cache");
+                    return new List<KalshiEventInfo>(_cachedEvents);
+                }
+            }
+
             var all = new List<KalshiEventInfo>();
             string cursor = "";
             int pages = 0;
             while (pages < maxPages)
             {
-                var qs = $"/trade-api/v2/events?status=open&limit=200" +
-                         (string.IsNullOrEmpty(cursor) ? "" : $"&cursor={Uri.EscapeDataString(cursor)}");
-                using var req = BuildRequest(HttpMethod.Get, "/trade-api/v2/events");
-                using var get = new HttpRequestMessage(HttpMethod.Get, qs);
-                CopyAuth(req, get);
+                // Throttle BEFORE every request after the first to stay well under
+                // Kalshi's basic-tier limit (~10 req/s). 200ms = 5 req/s ceiling.
+                if (pages > 0) await Task.Delay(200).ConfigureAwait(false);
 
-                using var resp = await _http.SendAsync(get).ConfigureAwait(false);
-                var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
-                if (!resp.IsSuccessStatusCode)
-                {
-                    log.Warn($"events page {pages}: {(int)resp.StatusCode} {body[..Math.Min(160, body.Length)]}");
-                    break;
-                }
+                var (ok, body) = await FetchPageWithBackoffAsync(cursor).ConfigureAwait(false);
+                if (!ok) { log.Warn($"page {pages}: giving up after retries"); break; }
 
                 using var doc = JsonDocument.Parse(body);
                 if (doc.RootElement.TryGetProperty("events", out var arr) && arr.ValueKind == JsonValueKind.Array)
@@ -104,7 +119,41 @@ namespace VisualHFT.Helpers
                 if (string.IsNullOrEmpty(cursor)) break;
             }
             log.Info($"event catalog: {all.Count} events across {pages} page(s)");
+
+            // Cache only on a complete-ish fetch (>=5 pages or empty cursor).
+            if (all.Count > 200)
+            {
+                lock (_cacheLock) { _cachedEvents = new List<KalshiEventInfo>(all); _cachedAt = DateTime.UtcNow; }
+            }
             return all;
+        }
+
+        private async Task<(bool ok, string body)> FetchPageWithBackoffAsync(string cursor)
+        {
+            int retryDelayMs = 1000;
+            const int maxRetries = 5;
+            for (int attempt = 0; attempt < maxRetries; attempt++)
+            {
+                var qs = "/trade-api/v2/events?status=open&limit=200" +
+                         (string.IsNullOrEmpty(cursor) ? "" : $"&cursor={Uri.EscapeDataString(cursor)}");
+                using var req = BuildRequest(HttpMethod.Get, "/trade-api/v2/events");
+                using var get = new HttpRequestMessage(HttpMethod.Get, qs);
+                CopyAuth(req, get);
+
+                using var resp = await _http.SendAsync(get).ConfigureAwait(false);
+                var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                if (resp.IsSuccessStatusCode) return (true, body);
+                if ((int)resp.StatusCode == 429)
+                {
+                    log.Warn($"429 on attempt {attempt + 1} — backing off {retryDelayMs}ms");
+                    await Task.Delay(retryDelayMs).ConfigureAwait(false);
+                    retryDelayMs = Math.Min(retryDelayMs * 2, 30_000);
+                    continue;
+                }
+                log.Warn($"page failed: {(int)resp.StatusCode} {body[..Math.Min(160, body.Length)]}");
+                return (false, body);
+            }
+            return (false, "");
         }
 
         private HttpRequestMessage BuildRequest(HttpMethod method, string path)

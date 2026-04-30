@@ -30,7 +30,11 @@ namespace VisualHFT.View
         private async void RefreshBtn_Click(object sender, RoutedEventArgs e)
         {
             RefreshBtn.IsEnabled = false;
-            try { await _vm.RefreshAsync(); }
+            try
+            {
+                KalshiEventCatalog.InvalidateCache();   // force a fresh fetch on Refresh
+                await _vm.RefreshAsync();
+            }
             finally { RefreshBtn.IsEnabled = true; }
         }
 
