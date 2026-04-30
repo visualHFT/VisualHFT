@@ -143,6 +143,7 @@
                     <Button Width="200" Height="40" Margin="5 5 40 5" Content="📈 Multi Venue Prices" ToolTip="See prices from all venues at the same time." Click="ButtonMultiVenuePrices_Click" />
                     <Button Width="180" Height="40" Margin="5 5 40 5" Content="🎯 Kalshi Strikes" ToolTip="Live top-of-book per Kalshi strike, grouped by event." Click="ButtonKalshiStrikes_Click" />
                     <Button Width="180" Height="40" Margin="5 5 40 5" Content="📁 Events Browser" ToolTip="Browse every open Kalshi event, grouped by API category." Click="ButtonKalshiBrowser_Click" />
+                    <Button Width="160" Height="40" Margin="5 5 40 5" Content="📋 Watch List" ToolTip="Live top-of-book for every ticker you're watching. Add/remove here." Click="ButtonKalshiWatchList_Click" />
                     <Button Width="60" Height="40" Margin="5" Content="⛭" ToolTip="Application Settings" FontSize="25" VerticalAlignment="Top" HorizontalAlignment="Left" Click="ButtonAppSettings_Click" />
                     <Button Width="60" Height="40" Margin="5" Content="🧩" ToolTip="Plugins Management" FontSize="25" Click="ButtonPluginManagement_Click" />
                     <Button Width="60" Height="40" Margin="5" Content="⚡" ToolTip="Trigger Management" FontSize="25" x:Name="triggerRules" Click="triggerRules_Click" />

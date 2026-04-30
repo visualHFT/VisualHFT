@@ -29,11 +29,21 @@ namespace VisualHFT.Helpers
             get => _oi;
             set { _oi = value; PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(OpenInterest))); PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(OpenInterestText))); }
         }
-        public string OpenInterestText =>
-            OpenInterest <= 0       ? ""
-          : OpenInterest >= 1_000_000 ? $"{OpenInterest/1_000_000:F1}M"
-          : OpenInterest >= 1_000     ? $"{OpenInterest/1_000:F1}K"
-          : $"{OpenInterest:F0}";
+        public string OpenInterestText => Format(OpenInterest);
+
+        private double _volume;
+        public double Volume
+        {
+            get => _volume;
+            set { _volume = value; PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Volume))); PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(VolumeText))); }
+        }
+        public string VolumeText => Format(Volume);
+
+        private static string Format(double v) =>
+            v <= 0           ? ""
+          : v >= 1_000_000   ? $"{v/1_000_000:F1}M"
+          : v >= 1_000       ? $"{v/1_000:F1}K"
+          : $"{v:F0}";
 
         private int _markets;
         public int MarketCount
@@ -237,9 +247,9 @@ namespace VisualHFT.Helpers
         /// Used by the events browser to sort categories by liquidity.
         /// Throttled + retry-on-429 like FetchAllOpenAsync.
         /// </summary>
-        public async Task<Dictionary<string, (double oi, int markets)>> FetchEventLiquidityAsync(int maxPages = 200)
+        public async Task<Dictionary<string, (double oi, double vol, int markets)>> FetchEventLiquidityAsync(int maxPages = 200)
         {
-            var byEvent = new Dictionary<string, (double oi, int markets)>(StringComparer.Ordinal);
+            var byEvent = new Dictionary<string, (double oi, double vol, int markets)>(StringComparer.Ordinal);
             string cursor = "";
             int pages = 0;
             while (pages < maxPages)
@@ -275,15 +285,21 @@ namespace VisualHFT.Helpers
                     {
                         var ev = m.TryGetProperty("event_ticker", out var et) ? et.GetString() ?? "" : "";
                         if (string.IsNullOrEmpty(ev)) continue;
-                        double oi = 0;
+                        double oi = 0, vol = 0;
                         if (m.TryGetProperty("open_interest_fp", out var oiEl))
                         {
                             var s = oiEl.GetString();
                             if (!string.IsNullOrEmpty(s) && double.TryParse(s, System.Globalization.NumberStyles.Any,
                                     System.Globalization.CultureInfo.InvariantCulture, out var p)) oi = p;
                         }
-                        var cur = byEvent.TryGetValue(ev, out var v) ? v : (0.0, 0);
-                        byEvent[ev] = (cur.Item1 + oi, cur.Item2 + 1);
+                        if (m.TryGetProperty("volume_fp", out var volEl))
+                        {
+                            var s = volEl.GetString();
+                            if (!string.IsNullOrEmpty(s) && double.TryParse(s, System.Globalization.NumberStyles.Any,
+                                    System.Globalization.CultureInfo.InvariantCulture, out var p)) vol = p;
+                        }
+                        (double oi, double vol, int markets) cur = byEvent.TryGetValue(ev, out var v) ? v : (0.0, 0.0, 0);
+                        byEvent[ev] = (cur.oi + oi, cur.vol + vol, cur.markets + 1);
                     }
                 }
                 cursor = doc.RootElement.TryGetProperty("cursor", out var cu) ? cu.GetString() ?? "" : "";

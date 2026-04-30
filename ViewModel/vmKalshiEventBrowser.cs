@@ -91,7 +91,8 @@ namespace VisualHFT.ViewModel
                         if (liq.TryGetValue(e.EventTicker, out var v))
                         {
                             e.OpenInterest = v.oi;
-                            e.MarketCount = v.markets;
+                            e.Volume       = v.vol;
+                            e.MarketCount  = v.markets;
                         }
                     }
                     // Resort each category by OI desc, ticker asc as tiebreaker

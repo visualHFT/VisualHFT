@@ -66,11 +66,19 @@
                               Background="#FF1A1A1A"
                               BorderThickness="0">
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="OI"            Binding="{Binding OpenInterestText}" Width="80">
+                            <DataGridTextColumn Header="OI"            Binding="{Binding OpenInterestText}" SortMemberPath="OpenInterest" Width="80">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Foreground" Value="#FFFFD54F"/>
                                         <Setter Property="FontWeight" Value="Bold"/>
+                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="Volume"        Binding="{Binding VolumeText}" SortMemberPath="Volume" Width="80">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="#FF8AB4F8"/>
                                         <Setter Property="HorizontalAlignment" Value="Right"/>
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
