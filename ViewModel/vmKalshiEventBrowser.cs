@@ -14,6 +14,7 @@ namespace VisualHFT.ViewModel
     {
         public string Category { get; init; } = "";
         public ObservableCollection<KalshiEventInfo> Events { get; } = new();
+        public System.ComponentModel.ICollectionView? FilteredEvents { get; set; }
         public string Header => $"{Category} ({Events.Count})";
     }
 
@@ -24,6 +25,18 @@ namespace VisualHFT.ViewModel
     public sealed class vmKalshiEventBrowser : INotifyPropertyChanged
     {
         public ObservableCollection<KalshiCategoryGroup> Groups { get; } = new();
+
+        private string _search = "";
+        public string Search
+        {
+            get => _search;
+            set
+            {
+                _search = value ?? "";
+                Notify(nameof(Search));
+                foreach (var g in Groups) g.FilteredEvents?.Refresh();
+            }
+        }
 
         private bool _isLoading;
         public bool IsLoading { get => _isLoading; set { _isLoading = value; Notify(nameof(IsLoading)); Notify(nameof(StatusText)); } }
@@ -67,6 +80,18 @@ namespace VisualHFT.ViewModel
                     var bucket = new KalshiCategoryGroup { Category = g.Key };
                     foreach (var e in g.OrderBy(x => x.EventTicker))
                         bucket.Events.Add(e);
+                    var view = System.Windows.Data.CollectionViewSource.GetDefaultView(bucket.Events);
+                    view.Filter = obj =>
+                    {
+                        if (string.IsNullOrWhiteSpace(_search)) return true;
+                        if (obj is not KalshiEventInfo evt) return true;
+                        var s = _search.Trim();
+                        return evt.EventTicker.Contains(s, StringComparison.OrdinalIgnoreCase)
+                            || evt.SeriesTicker.Contains(s, StringComparison.OrdinalIgnoreCase)
+                            || evt.Title.Contains(s, StringComparison.OrdinalIgnoreCase)
+                            || evt.SubTitle.Contains(s, StringComparison.OrdinalIgnoreCase);
+                    };
+                    bucket.FilteredEvents = view;
                     Groups.Add(bucket);
                 }
                 TotalEvents = events.Count;
