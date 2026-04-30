@@ -76,6 +76,7 @@
 
         <!-- Asks (top half) -->
         <DataGrid Grid.Row="1"
+                  x:Name="AsksGrid"
                   ItemsSource="{Binding Asks}"
                   AutoGenerateColumns="False"
                   CanUserAddRows="False"
@@ -113,6 +114,7 @@
 
         <!-- Bids (bottom half) -->
         <DataGrid Grid.Row="3"
+                  x:Name="BidsGrid"
                   ItemsSource="{Binding Bids}"
                   AutoGenerateColumns="False"
                   CanUserAddRows="False"

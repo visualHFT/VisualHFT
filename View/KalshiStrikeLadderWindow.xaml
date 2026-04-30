@@ -60,6 +60,12 @@
                   BorderThickness="0"
                   AlternationCount="2"
                   MouseDoubleClick="StrikesGrid_MouseDoubleClick">
+            <DataGrid.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="📊 Show implied PMF for this event" Click="ShowPMF_Click"/>
+                    <MenuItem Header="📈 Open ladder for this market" Click="OpenLadder_Click"/>
+                </ContextMenu>
+            </DataGrid.ContextMenu>
             <DataGrid.Columns>
                 <DataGridTextColumn Header="Cat"     Binding="{Binding Category}"    Width="90">
                     <DataGridTextColumn.ElementStyle>

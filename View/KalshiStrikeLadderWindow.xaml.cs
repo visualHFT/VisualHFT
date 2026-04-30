@@ -22,10 +22,26 @@ namespace VisualHFT.View
 
         private void StrikesGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
         {
+            OpenLadderForSelected();
+        }
+
+        private void OpenLadder_Click(object sender, RoutedEventArgs e) => OpenLadderForSelected();
+
+        private void OpenLadderForSelected()
+        {
             if (StrikesGrid.SelectedItem is KalshiStrikeRow row && !string.IsNullOrEmpty(row.Ticker))
             {
                 var ladder = new KalshiLadderWindow(row.Ticker);
                 ladder.Show();
+            }
+        }
+
+        private void ShowPMF_Click(object sender, RoutedEventArgs e)
+        {
+            if (StrikesGrid.SelectedItem is KalshiStrikeRow row && !string.IsNullOrEmpty(row.EventTicker))
+            {
+                var pmf = new KalshiPMFWindow(row.EventTicker);
+                pmf.Show();
             }
         }
     }
