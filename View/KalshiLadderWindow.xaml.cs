@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Windows;
+using System.Windows.Controls.Primitives;
+using System.Windows.Controls;
+using System.Windows.Input;
 using VisualHFT.Helpers;
 using VisualHFT.ViewModel;
 
@@ -78,6 +81,31 @@ namespace VisualHFT.View
                 }
             }
             finally { OrderSubmit.IsEnabled = true; }
+        }
+
+        private void DepthToggle_Click(object sender, RoutedEventArgs e) => _vm.ToggleDepthChart();
+        private void UnitContracts_Click(object sender, RoutedEventArgs e) => _vm.SetDepthUnit(KalshiDepthUnit.Contracts);
+        private void UnitNotional_Click(object sender, RoutedEventArgs e)  => _vm.SetDepthUnit(KalshiDepthUnit.Notional);
+        private void UnitPercent_Click(object sender, RoutedEventArgs e)   => _vm.SetDepthUnit(KalshiDepthUnit.Percent);
+
+        // Keyboard shortcut: Ctrl+D toggles the depth chart, but only when focus
+        // is not in a text-editing surface — otherwise the user can't type the
+        // letter D into the order-entry fields.
+        private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.D) return;
+            if ((Keyboard.Modifiers & ModifierKeys.Control) != ModifierKeys.Control) return;
+            if (IsTextInputFocused()) return;
+            _vm.ToggleDepthChart();
+            e.Handled = true;
+        }
+
+        private static bool IsTextInputFocused()
+        {
+            // TextBox/RichTextBox both derive from TextBoxBase; PasswordBox is its
+            // own thing. Cover both so order entry typing is never hijacked.
+            var f = Keyboard.FocusedElement;
+            return f is TextBoxBase or PasswordBox;
         }
 
         private async void OrderCancelLast_Click(object sender, RoutedEventArgs e)

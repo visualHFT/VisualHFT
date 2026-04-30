@@ -3,14 +3,77 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:oxy="clr-namespace:OxyPlot.SkiaSharp.Wpf;assembly=OxyPlot.SkiaSharp.Wpf"
+        xmlns:converters="clr-namespace:VisualHFT.Converters"
         mc:Ignorable="d"
         Title="{Binding WindowTitle}"
         Height="720" Width="520"
         Background="#FF1A1A1A"
         TextElement.Foreground="White"
         FontFamily="Consolas"
-        FontSize="14">
+        FontSize="14"
+        PreviewKeyDown="Window_PreviewKeyDown">
     <Window.Resources>
+        <converters:BoolToVisibilityConverter x:Key="BoolToVis"/>
+        <Style x:Key="ChipBtn" TargetType="Button">
+            <Setter Property="Background" Value="#FF333333"/>
+            <Setter Property="Foreground" Value="#FFAAAAAA"/>
+            <Setter Property="BorderBrush" Value="#FF555555"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="6,1"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="MinWidth" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ChipBtnUnitContracts" TargetType="Button" BasedOn="{StaticResource ChipBtn}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsUnitContracts}" Value="True">
+                    <Setter Property="Background" Value="#FF1565C0"/>
+                    <Setter Property="Foreground" Value="White"/>
+                    <Setter Property="BorderBrush" Value="#FF42A5F5"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="ChipBtnUnitNotional" TargetType="Button" BasedOn="{StaticResource ChipBtn}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsUnitNotional}" Value="True">
+                    <Setter Property="Background" Value="#FF1565C0"/>
+                    <Setter Property="Foreground" Value="White"/>
+                    <Setter Property="BorderBrush" Value="#FF42A5F5"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="ChipBtnUnitPercent" TargetType="Button" BasedOn="{StaticResource ChipBtn}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsUnitPercent}" Value="True">
+                    <Setter Property="Background" Value="#FF1565C0"/>
+                    <Setter Property="Foreground" Value="White"/>
+                    <Setter Property="BorderBrush" Value="#FF42A5F5"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="ChipBtnDepthToggle" TargetType="Button" BasedOn="{StaticResource ChipBtn}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding ShowDepthChart}" Value="True">
+                    <Setter Property="Background" Value="#FF1565C0"/>
+                    <Setter Property="Foreground" Value="White"/>
+                    <Setter Property="BorderBrush" Value="#FF42A5F5"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
         <Style TargetType="DataGridColumnHeader">
             <Setter Property="Background" Value="#FF252526"/>
             <Setter Property="Foreground" Value="#FF999999"/>
@@ -44,7 +107,19 @@
         <!-- Header -->
         <Border DockPanel.Dock="Top" Background="#FF252526" Padding="14,10">
             <StackPanel>
-                <TextBlock Text="{Binding Symbol}" FontSize="16" FontWeight="Bold" Foreground="White"/>
+                <!-- Primary header: the market's human-readable subtitle/title;
+                     falls back to the ticker until /markets/{ticker} returns. -->
+                <TextBlock Text="{Binding HeaderPrimary}"
+                           FontSize="16" FontWeight="Bold" Foreground="White"
+                           TextWrapping="Wrap"/>
+                <!-- Secondary line: ticker + parent question when both apply.
+                     Hidden until metadata is loaded so the header never shows
+                     a duplicate ticker. -->
+                <TextBlock Text="{Binding HeaderSecondary}"
+                           FontSize="11" Foreground="#FF999999"
+                           TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                           Margin="0,2,0,0"
+                           Visibility="{Binding HasHeaderSecondary, Converter={StaticResource BoolToVis}}"/>
                 <Grid Margin="0,8,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
@@ -63,13 +138,51 @@
                         </StackPanel>
                     </Border>
                 </Grid>
-                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                    <TextBlock Text="Mid: " Foreground="#FF999999"/>
-                    <TextBlock Text="{Binding MidPrice}" Foreground="#FFFFD54F" FontWeight="Bold"/>
-                    <TextBlock Text="    " Foreground="#FF999999"/>
-                    <TextBlock Text="{Binding SpreadText}" Foreground="#FF999999"/>
-                </StackPanel>
+                <Grid Margin="0,6,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal">
+                        <TextBlock Text="Mid: " Foreground="#FF999999"/>
+                        <TextBlock Text="{Binding MidPrice}" Foreground="#FFFFD54F" FontWeight="Bold"/>
+                        <TextBlock Text="    " Foreground="#FF999999"/>
+                        <TextBlock Text="{Binding SpreadText}" Foreground="#FF999999"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- Unit-mode chips (only meaningful when chart is shown). -->
+                        <StackPanel Orientation="Horizontal"
+                                    Visibility="{Binding ShowDepthChart, Converter={StaticResource BoolToVis}}">
+                            <Button Content="Cnt" Click="UnitContracts_Click"
+                                    Style="{StaticResource ChipBtnUnitContracts}"
+                                    ToolTip="Show cumulative depth in contracts"/>
+                            <Button Content="$" Click="UnitNotional_Click" Margin="3,0,0,0"
+                                    Style="{StaticResource ChipBtnUnitNotional}"
+                                    ToolTip="Show cumulative depth in notional dollars"/>
+                            <Button Content="%" Click="UnitPercent_Click" Margin="3,0,8,0"
+                                    Style="{StaticResource ChipBtnUnitPercent}"
+                                    ToolTip="Show cumulative depth as a percent of total book size"/>
+                        </StackPanel>
+                        <!-- Depth chart visibility toggle. Accent when on, muted when off. -->
+                        <Button x:Name="DepthToggle" Click="DepthToggle_Click" Content="📊 Depth"
+                                Style="{StaticResource ChipBtnDepthToggle}"
+                                ToolTip="Toggle cumulative depth chart (Ctrl+D)"/>
+                    </StackPanel>
+                </Grid>
             </StackPanel>
+        </Border>
+
+        <!-- Cumulative depth chart, off by default. Collapsed (zero size) when off
+             so the ladder reclaims the full vertical region with no gap. -->
+        <Border DockPanel.Dock="Top"
+                Background="#FF141414"
+                BorderBrush="#FF333333"
+                BorderThickness="0,0,0,1"
+                Height="160"
+                Visibility="{Binding ShowDepthChart, Converter={StaticResource BoolToVis}}">
+            <oxy:PlotView Model="{Binding DepthChartModel}"
+                          IsMouseWheelEnabled="False"
+                          Background="Transparent"/>
         </Border>
 
         <!-- Order panel pinned to the bottom of the window -->
