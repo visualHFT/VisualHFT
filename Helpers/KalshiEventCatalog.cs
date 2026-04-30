@@ -125,6 +125,41 @@ namespace VisualHFT.Helpers
             foreach (var h in from.Headers) to.Headers.TryAddWithoutValidation(h.Key, h.Value);
         }
 
+        /// <summary>
+        /// Fetch the list of market tickers (strikes) inside one event.
+        /// </summary>
+        public async Task<List<string>> GetEventMarketsAsync(string eventTicker)
+        {
+            var basePath = $"/trade-api/v2/events/{eventTicker}";
+            var qs = "?with_nested_markets=true";
+            using var req = BuildRequest(HttpMethod.Get, basePath);
+            using var get = new HttpRequestMessage(HttpMethod.Get, basePath + qs);
+            CopyAuth(req, get);
+
+            using var resp = await _http.SendAsync(get).ConfigureAwait(false);
+            var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode)
+            {
+                log.Warn($"GetEventMarkets {eventTicker}: {(int)resp.StatusCode}");
+                return new List<string>();
+            }
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("event", out var ev))
+                return new List<string>();
+            if (!ev.TryGetProperty("markets", out var arr) || arr.ValueKind != JsonValueKind.Array)
+                return new List<string>();
+            var tickers = new List<string>();
+            foreach (var m in arr.EnumerateArray())
+            {
+                if (m.TryGetProperty("ticker", out var t))
+                {
+                    var s = t.GetString();
+                    if (!string.IsNullOrEmpty(s)) tickers.Add(s);
+                }
+            }
+            return tickers;
+        }
+
         public void Dispose()
         {
             if (_disposed) return;

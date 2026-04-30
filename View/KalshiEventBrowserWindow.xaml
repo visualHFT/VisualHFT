@@ -42,9 +42,11 @@
             </StackPanel>
         </Border>
 
-        <TabControl ItemsSource="{Binding Groups}"
+        <TabControl x:Name="GroupsTabs"
+                    ItemsSource="{Binding Groups}"
                     Background="#FF1A1A1A"
-                    BorderThickness="0">
+                    BorderThickness="0"
+                    MouseDoubleClick="GroupsTabs_MouseDoubleClick">
             <TabControl.ItemTemplate>
                 <DataTemplate>
                     <TextBlock Text="{Binding Header}" FontWeight="SemiBold"/>
