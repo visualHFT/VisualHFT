@@ -22,9 +22,6 @@ namespace VisualHFT.Helpers
         private static readonly ILog log = LogManager.GetLogger(typeof(KalshiTradeHelper));
 
         private const string DemoBase = "https://demo-api.kalshi.co";
-        private const string DemoKeyId = "3a1abd3c-ff85-42ed-9a28-5a43a17942c9";
-        private const string DemoPemEnvVar = "KALSHI_DEMO_PEM";
-        private const string DemoPemFileName = "kalshi-demo.pem";
 
         public const int MAX_COUNT = 5;
 
@@ -42,29 +39,8 @@ namespace VisualHFT.Helpers
 
         public static KalshiTradeHelper ForDemo()
         {
-            var pemPath = ResolveDemoPemPath();
-            var rsa = RSA.Create();
-            rsa.ImportFromPem(File.ReadAllText(pemPath));
-            return new KalshiTradeHelper(DemoBase, DemoKeyId, rsa);
-        }
-
-        private static string ResolveDemoPemPath()
-        {
-            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var candidates = new[]
-            {
-                Environment.GetEnvironmentVariable(DemoPemEnvVar),
-                Path.Combine(userProfile, ".visualhft", DemoPemFileName),
-                @"C:\Users\paulo\Desktop\Repositories\visualhft-kalshi\keys\kalshi-demo.pem",
-            };
-            foreach (var c in candidates)
-            {
-                if (!string.IsNullOrEmpty(c) && File.Exists(c)) return c;
-            }
-            throw new FileNotFoundException(
-                $"Kalshi demo PEM not found. Set the {DemoPemEnvVar} environment variable " +
-                $"to the full path of your kalshi-demo.pem, or place it at " +
-                $"{Path.Combine(userProfile, ".visualhft", DemoPemFileName)}.");
+            var (keyId, rsa) = KalshiCredentials.LoadDemo();
+            return new KalshiTradeHelper(DemoBase, keyId, rsa);
         }
 
         public sealed class OrderResult

@@ -31,9 +31,8 @@ namespace VisualHFT.Helpers
         private static readonly ILog log = LogManager.GetLogger(typeof(KalshiBrowserPoller));
 
         private const string ProdBase = "https://api.elections.kalshi.com";
-        private const string ProdKeyId = "68975a46-1202-4c8a-b71b-3e5fc0817a17";
-        private const string ProdPemPath =
-            @"C:\Users\paulo\Desktop\Repositories\kalshi-data\secrets\kalshi_private_key.pem";
+        // Filled from KALSHI_PROD_KEY_ID at construction; empty if not configured.
+        private readonly string _keyId;
 
         // Match the plugin so the Provider/Symbol dropdown groups everything together
         public const int KalshiProviderId = 100;
@@ -73,11 +72,17 @@ namespace VisualHFT.Helpers
         private KalshiBrowserPoller()
         {
             _http = new HttpClient { BaseAddress = new Uri(ProdBase) };
-            _rsa = RSA.Create();
-            if (File.Exists(ProdPemPath))
-                _rsa.ImportFromPem(File.ReadAllText(ProdPemPath));
+            if (KalshiCredentials.TryLoadProd(out var keyId, out var rsa, out var error))
+            {
+                _keyId = keyId;
+                _rsa = rsa;
+            }
             else
-                log.Warn($"BrowserPoller: prod PEM not found at {ProdPemPath} — polling will fail");
+            {
+                _keyId = "";
+                _rsa = RSA.Create();
+                log.Warn($"BrowserPoller: prod credentials not configured — polling will fail. {error}");
+            }
 
             // When the user picks a ticker (Watch List, Strike Ladder, Browser),
             // remember it so the trade-tape poll fires for that ticker.
@@ -337,7 +342,7 @@ namespace VisualHFT.Helpers
             var msg = Encoding.UTF8.GetBytes(ts + method.Method + pathToSign);
             var sig = Convert.ToBase64String(_rsa.SignData(msg, HashAlgorithmName.SHA256, RSASignaturePadding.Pss));
             var req = new HttpRequestMessage(method, pathToSign + queryString);
-            req.Headers.Add("KALSHI-ACCESS-KEY", ProdKeyId);
+            req.Headers.Add("KALSHI-ACCESS-KEY", _keyId);
             req.Headers.Add("KALSHI-ACCESS-SIGNATURE", sig);
             req.Headers.Add("KALSHI-ACCESS-TIMESTAMP", ts);
             req.Headers.Add("Accept", "application/json");
