@@ -30,7 +30,6 @@ namespace VisualHFT.Helpers
     {
         private static readonly ILog log = LogManager.GetLogger(typeof(KalshiBrowserPoller));
 
-
         // Match the plugin so the Provider/Symbol dropdown groups everything together
         public const int KalshiProviderId = 100;
         public const string KalshiProviderName = "Kalshi";
