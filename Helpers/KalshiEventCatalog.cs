@@ -64,8 +64,6 @@ namespace VisualHFT.Helpers
     {
         private static readonly ILog log = LogManager.GetLogger(typeof(KalshiEventCatalog));
 
-        private const string ProdBase = "https://api.elections.kalshi.com";
-
         private readonly HttpClient _http;
         private readonly RSA _rsa;
         private readonly string _keyId;
@@ -80,8 +78,12 @@ namespace VisualHFT.Helpers
 
         public static KalshiEventCatalog ForProd()
         {
-            var (keyId, rsa) = KalshiCredentials.LoadProd();
-            return new KalshiEventCatalog(ProdBase, keyId, rsa);
+            var pemPath = KalshiCredentials.ProdPemPath;
+            if (!File.Exists(pemPath))
+                throw new FileNotFoundException($"Prod PEM not found at {pemPath}");
+            var rsa = RSA.Create();
+            rsa.ImportFromPem(File.ReadAllText(pemPath));
+            return new KalshiEventCatalog(KalshiCredentials.ProdBase, KalshiCredentials.ProdKeyId, rsa);
         }
 
         // Process-wide cache + lock so reopening the browser is instant and we don't

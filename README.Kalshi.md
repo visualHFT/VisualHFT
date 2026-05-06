@@ -6,61 +6,41 @@ windows and helpers for trading prediction markets on
 browser, watch list, implied PMF, depth chart, and a demo-only order panel.
 
 The UI lives in **this repo**. The actual data-feed plugin (Kalshi WebSocket
-/ REST → VisualHFT order books and trades) lives in a **separate repo**:
+/ REST → VisualHFT order books and trades) lives in a **separate repo**
+that also bundles a vendored copy of this fork for one-clone setup:
 
-- Plugin: <https://github.com/Paulo-BatistaFerraz/VisualHFT-Kalshi>
-  (the working folder is `visualhft-kalshi/`).
+- Bundle (recommended): <https://github.com/Paulo-BatistaFerraz/VisualHFT-Kalshi>
+- This UI fork only: <https://github.com/Paulo-BatistaFerraz/VisualHFT>
 
 Cloning this repo alone gets you the Kalshi UI, but no data will appear
-until the plugin is built and dropped into VisualHFT's plugin folder,
-because the UI is a consumer of order-book/trade events normalised by the
-plugin.
+until the plugin DLL is built (from the bundle repo) and dropped into
+VisualHFT's plugin folder.
 
-## Two-repo setup
+## Configure Kalshi credentials
 
-1. Clone this repo (UI):
+Nothing is hardcoded — supply your own via environment variables. Generate
+a key pair from Kalshi's web UI (<https://kalshi.com> for prod or
+<https://demo.kalshi.co> for demo) → Profile → **API Keys** → **Create new
+API key**. Save the private key Kalshi shows (one-time display) and the
+key id somewhere outside this repo, then set:
 
-   ```sh
-   git clone https://github.com/Paulo-BatistaFerraz/VisualHFT.git
-   ```
+```powershell
+# Prod (read-only Events Browser, Watch List, Strike/Per-market ladder data)
+$env:KALSHI_PROD_KEY_ID   = "<your prod key id>"
+$env:KALSHI_PROD_PEM_PATH = "C:\path\to\your\kalshi-prod.pem"
 
-2. Clone the plugin repo and build the `visualhft-kalshi` plugin DLL:
+# Demo (in-app order panel)
+$env:KALSHI_DEMO_KEY_ID   = "<your demo key id>"
+$env:KALSHI_DEMO_PEM_PATH = "C:\path\to\your\kalshi-demo.pem"
+```
 
-   ```sh
-   git clone https://github.com/Paulo-BatistaFerraz/VisualHFT-Kalshi.git
-   ```
+Both scopes are independent — view-only features run without demo creds,
+and the order panel throws a clear error pointing at the missing variable
+if you haven't set demo. Without prod creds the polling helpers log a
+warning and skip work instead of crashing the app.
 
-   Drop the resulting `visualhft-kalshi.dll` into VisualHFT's plugin folder
-   so `PluginManager` picks it up at startup. The plugin reports the same
-   provider ID/name the UI expects (see `Helpers/KalshiBrowserPoller.cs`).
-
-3. **Configure your Kalshi credentials.** Nothing is hardcoded — supply
-   your own via environment variables. Two scopes are independent:
-
-   | Env var               | What it is                                                  | Required for                                  |
-   | --------------------- | ----------------------------------------------------------- | --------------------------------------------- |
-   | `KALSHI_PROD_KEY_ID`  | Your Kalshi **prod** access-key id (UUID)                   | Events Browser, Watch List, Strike/Per-market ladder data, browser-poller |
-   | `KALSHI_PROD_PEM`     | Full path to your prod RSA private key in PEM format        | same as above                                 |
-   | `KALSHI_DEMO_KEY_ID`  | Your Kalshi **demo** access-key id (UUID)                   | Demo-only in-app order panel                  |
-   | `KALSHI_DEMO_PEM`     | Full path to your demo RSA private key in PEM format        | same as above                                 |
-
-   Generate a key pair from the Kalshi web UI (Settings → API keys) for each
-   environment you want to use. Kalshi keeps the public side; you keep the
-   PEM.
-
-   The PEM env vars are optional — if unset, the resolver also checks
-   `%USERPROFILE%\.visualhft\kalshi-prod.pem` and
-   `%USERPROFILE%\.visualhft\kalshi-demo.pem`. The key-id env vars are
-   required (no defaults).
-
-   View-only features will run without the demo creds; the order panel
-   will throw a clear error pointing at the missing variable. Likewise
-   without prod creds the polling helpers log a warning and skip work
-   instead of crashing the UI.
-
-4. Open `VisualHFT.sln`, build, and run as usual. The Kalshi windows light
-   up automatically once order books for Kalshi tickers start arriving from
-   the plugin.
+The credential reader and error messages live in
+[`Helpers/KalshiCredentials.cs`](Helpers/KalshiCredentials.cs).
 
 ## What this fork adds vs. upstream
 
@@ -77,4 +57,4 @@ Approximately 3.4k lines added, additive only — no upstream files removed.
   to wire up the Kalshi UI and persist settings.
 
 See <https://github.com/Paulo-BatistaFerraz/VisualHFT-Kalshi> for the
-plugin side.
+plugin side and the bundled deliverable.

@@ -21,8 +21,6 @@ namespace VisualHFT.Helpers
     {
         private static readonly ILog log = LogManager.GetLogger(typeof(KalshiTradeHelper));
 
-        private const string DemoBase = "https://demo-api.kalshi.co";
-
         public const int MAX_COUNT = 5;
 
         private readonly HttpClient _http;
@@ -39,8 +37,12 @@ namespace VisualHFT.Helpers
 
         public static KalshiTradeHelper ForDemo()
         {
-            var (keyId, rsa) = KalshiCredentials.LoadDemo();
-            return new KalshiTradeHelper(DemoBase, keyId, rsa);
+            var pemPath = KalshiCredentials.DemoPemPath;
+            if (!File.Exists(pemPath))
+                throw new FileNotFoundException($"Demo PEM not found at {pemPath}");
+            var rsa = RSA.Create();
+            rsa.ImportFromPem(File.ReadAllText(pemPath));
+            return new KalshiTradeHelper(KalshiCredentials.DemoBase, KalshiCredentials.DemoKeyId, rsa);
         }
 
         public sealed class OrderResult
