@@ -22,6 +22,11 @@ namespace VisualHFT.Helpers
         public bool MutuallyExclusive { get; init; }
         public string LastUpdated { get; init; } = "";
 
+        // Polymarket-only: the first market's YES clobTokenId. Empty for Kalshi rows.
+        // Used by "Watch + Load Chart" to route Polymarket events to providerId 11
+        // (the Polymarket plugin) instead of the Kalshi path.
+        public string PolymarketYesToken { get; init; } = "";
+
         // Filled in by FetchAllMarketsAsync after events load — aggregated over the event's markets.
         private double _oi;
         public double OpenInterest

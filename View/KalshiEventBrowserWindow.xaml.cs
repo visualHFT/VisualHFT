@@ -28,12 +28,25 @@ namespace VisualHFT.View
             this.Loaded += async (_, _) => await _vm.RefreshAsync();
         }
 
+        // Provider ID for the Polymarket plugin. Matches
+        // PolymarketPluginSettings.Provider.ProviderID in the visualhft-polymarket repo.
+        private const int PolymarketProviderId = 11;
+
+        /// <summary>True if the row originated from the Polymarket catalog.</summary>
+        private static bool IsPolymarketRow(KalshiEventInfo evt) =>
+            !string.IsNullOrEmpty(evt.PolymarketYesToken);
+
         private async void RefreshBtn_Click(object sender, RoutedEventArgs e)
         {
             RefreshBtn.IsEnabled = false;
             try
             {
-                KalshiEventCatalog.InvalidateCache();   // force a fresh fetch on Refresh
+                // Invalidate whichever venue's cache is currently selected so the
+                // refresh button actually re-fetches.
+                if (_vm.IsPolymarket)
+                    PolymarketBrowserPoller.InvalidateCache();
+                else
+                    KalshiEventCatalog.InvalidateCache();
                 await _vm.RefreshAsync();
             }
             finally { RefreshBtn.IsEnabled = true; }
@@ -54,6 +67,31 @@ namespace VisualHFT.View
 
         private async Task WatchEventAsync(KalshiEventInfo evt, bool loadChart)
         {
+            // Polymarket events route differently: there's no Kalshi-style
+            // event→markets fan-out (each event already carries its first
+            // market's YES clobTokenId). All we do is fire the cross-window
+            // request so the main view can pick it up via the Polymarket
+            // plugin (providerId 11).
+            if (IsPolymarketRow(evt))
+            {
+                if (loadChart)
+                {
+                    KalshiViewRequest.Show(evt.PolymarketYesToken, PolymarketProviderId);
+                    this.Title = $"Polymarket — Events Browser  •  Loaded {evt.EventTicker}";
+                }
+                else
+                {
+                    // "Add to Watch List (no chart)" — not yet wired for Polymarket;
+                    // surface a friendly message rather than silently no-op.
+                    MessageBox.Show(
+                        "Watch List support for Polymarket events is not yet implemented.\n" +
+                        "Use 'Watch + Load Chart' (double-click a row) instead.",
+                        "Polymarket — Events Browser",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                return;
+            }
+
             this.Title = $"Kalshi — Events Browser  •  Loading markets for {evt.EventTicker}…";
             try
             {
@@ -86,7 +124,17 @@ namespace VisualHFT.View
         private async void AddToWatchList_Click(object sender, RoutedEventArgs e)
         {
             var evt = SelectedEvent();
-            if (evt != null) await WatchEventAsync(evt, loadChart: false);
+            if (evt == null) return;
+            if (IsPolymarketRow(evt))
+            {
+                MessageBox.Show(
+                    "Add to Watch List is not yet supported for Polymarket events.\n" +
+                    "Use 'Watch + Load Chart' instead (the chart loads the YES token directly).",
+                    "Polymarket — Events Browser",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            await WatchEventAsync(evt, loadChart: false);
         }
 
         private async void WatchAndLoadChart_Click(object sender, RoutedEventArgs e)
@@ -99,6 +147,15 @@ namespace VisualHFT.View
         {
             var evt = SelectedEvent();
             if (evt == null) return;
+            if (IsPolymarketRow(evt))
+            {
+                MessageBox.Show(
+                    "Strike Ladder is not yet supported for Polymarket events.\n" +
+                    "It's currently wired for Kalshi event markets only.",
+                    "Polymarket — Events Browser",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
             await WatchEventAsync(evt, loadChart: false);
             // Open / focus the strike ladder so the user can see all strikes side-by-side
             try

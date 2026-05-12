@@ -37,7 +37,7 @@
         <Border DockPanel.Dock="Top" Background="#FF252526" Padding="14,10">
             <StackPanel>
                 <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="📁 Kalshi Events Browser" FontSize="16" FontWeight="Bold" Foreground="White"/>
+                    <TextBlock Text="{Binding BrowserTitle}" FontSize="16" FontWeight="Bold" Foreground="White"/>
                     <TextBlock Text="{Binding StatusText}" Foreground="#FF999999" VerticalAlignment="Center" Margin="20,0,0,0"/>
                     <Button x:Name="RefreshBtn" Content="↻ Refresh" Margin="20,0,0,0" Padding="10,2" Click="RefreshBtn_Click"/>
                 </StackPanel>
@@ -46,6 +46,14 @@
                     <TextBox x:Name="SearchInput" Width="380" VerticalAlignment="Center"
                              Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}"
                              ToolTip="Filter every category by ticker / series / title / subtitle. Case-insensitive substring."/>
+                    <TextBlock Text="🎯 Venue:" Foreground="#FFAAAAAA" VerticalAlignment="Center" Margin="20,0,6,0"/>
+                    <ComboBox x:Name="VenueCombo" Width="140" VerticalAlignment="Center"
+                              SelectedValuePath="Content"
+                              SelectedValue="{Binding SelectedVenue, Mode=TwoWay}"
+                              ToolTip="Switch the event catalog between Kalshi and Polymarket.">
+                        <ComboBoxItem Content="Kalshi"/>
+                        <ComboBoxItem Content="Polymarket"/>
+                    </ComboBox>
                     <TextBlock Text="    Filtering all categories live." Foreground="#FF777777" FontSize="10" VerticalAlignment="Center" Margin="20,0,0,0"/>
                 </StackPanel>
             </StackPanel>

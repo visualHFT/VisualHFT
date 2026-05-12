@@ -19,8 +19,8 @@ namespace VisualHFT.ViewModel
     }
 
     /// <summary>
-    /// Loads the whole Kalshi event catalog and exposes it grouped by category
-    /// for a tabbed browser view. Read-only.
+    /// Loads the whole event catalog (Kalshi or Polymarket, switched at runtime)
+    /// and exposes it grouped by category for a tabbed browser view. Read-only.
     /// </summary>
     public sealed class vmKalshiEventBrowser : INotifyPropertyChanged
     {
@@ -38,15 +38,48 @@ namespace VisualHFT.ViewModel
             }
         }
 
+        // Venue toggle. Bound as a plain string from the XAML ComboBox (selected
+        // ComboBoxItem's Content). "Kalshi" (default) or "Polymarket".
+        // Setting this kicks off a fresh RefreshAsync() automatically.
+        private string _selectedVenue = "Kalshi";
+        public string SelectedVenue
+        {
+            get => _selectedVenue;
+            set
+            {
+                var v = value ?? "Kalshi";
+                if (string.Equals(_selectedVenue, v, StringComparison.Ordinal)) return;
+                _selectedVenue = v;
+                Notify(nameof(SelectedVenue));
+                Notify(nameof(BrowserTitle));
+                Notify(nameof(StatusText));
+                // Fire-and-forget — UI thread doesn't need to await.
+                _ = RefreshAsync();
+            }
+        }
+
+        public bool IsPolymarket => string.Equals(_selectedVenue, "Polymarket", StringComparison.OrdinalIgnoreCase);
+
+        public string BrowserTitle => IsPolymarket
+            ? "📁 Polymarket Events Browser"
+            : "📁 Kalshi Events Browser";
+
         private bool _isLoading;
         public bool IsLoading { get => _isLoading; set { _isLoading = value; Notify(nameof(IsLoading)); Notify(nameof(StatusText)); } }
 
         private int _totalEvents;
         public int TotalEvents { get => _totalEvents; set { _totalEvents = value; Notify(nameof(TotalEvents)); Notify(nameof(StatusText)); } }
 
-        public string StatusText => IsLoading
-            ? "Loading event catalog from Kalshi…"
-            : $"{TotalEvents} open events across {Groups.Count} categories";
+        public string StatusText
+        {
+            get
+            {
+                var venue = IsPolymarket ? "Polymarket" : "Kalshi";
+                return IsLoading
+                    ? $"Loading event catalog from {venue}…"
+                    : $"{TotalEvents} open events across {Groups.Count} categories";
+            }
+        }
 
         public async Task RefreshAsync()
         {
@@ -57,14 +90,22 @@ namespace VisualHFT.ViewModel
             List<KalshiEventInfo> events;
             try
             {
-                using var cat = KalshiEventCatalog.ForProd();
-                events = await cat.FetchAllOpenAsync().ConfigureAwait(false);
+                if (IsPolymarket)
+                {
+                    events = await PolymarketBrowserPoller.FetchAllOpenAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    using var cat = KalshiEventCatalog.ForProd();
+                    events = await cat.FetchAllOpenAsync().ConfigureAwait(false);
+                }
             }
             catch (Exception ex)
             {
                 IsLoading = false;
+                var venueLabel = IsPolymarket ? "Polymarket" : "Kalshi";
                 MessageBox.Show($"Failed to load event catalog:\n\n{ex.Message}",
-                    "Kalshi Events Browser", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    $"{venueLabel} Events Browser", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
@@ -98,9 +139,31 @@ namespace VisualHFT.ViewModel
                 IsLoading = false;
             });
 
-            // Kick off the markets fetch in the background — once done, attach OI
-            // per event and resort each category by liquidity desc.
-            _ = Task.Run(() => LoadLiquidityAsync(events));
+            // Polymarket already carries liquidity/volume on the first fetch, so
+            // we don't run the secondary markets-aggregation pass for it.
+            if (!IsPolymarket)
+            {
+                // Kick off the markets fetch in the background — once done, attach OI
+                // per event and resort each category by liquidity desc.
+                _ = Task.Run(() => LoadLiquidityAsync(events));
+            }
+            else
+            {
+                // For Polymarket, just resort each category by liquidity desc now
+                // (no follow-up async work needed).
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    foreach (var bucket in Groups)
+                    {
+                        var sorted = bucket.Events
+                            .OrderByDescending(x => x.OpenInterest)
+                            .ThenBy(x => x.EventTicker)
+                            .ToList();
+                        bucket.Events.Clear();
+                        foreach (var e in sorted) bucket.Events.Add(e);
+                    }
+                });
+            }
         }
 
         private async Task LoadLiquidityAsync(List<KalshiEventInfo> events)
