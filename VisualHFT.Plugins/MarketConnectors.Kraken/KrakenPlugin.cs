@@ -12,6 +12,7 @@ using MarketConnectors.Kraken.UserControls;
 using MarketConnectors.Kraken.ViewModel;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -40,9 +41,25 @@ namespace MarketConnectors.Kraken
         private PlugInSettings _settings;
         private KrakenSocketClient _socketClient;
         private KrakenRestClient _restClient;
-        private Dictionary<string, VisualHFT.Model.OrderBook> _localOrderBooks = new Dictionary<string, VisualHFT.Model.OrderBook>();
-        private Dictionary<string, HelperCustomQueue<Tuple<DateTime, string, KrakenBookUpdate>>> _eventBuffers = new();
-        private Dictionary<string, HelperCustomQueue<Tuple<string, KrakenTradeUpdate>>> _tradesBuffers = new();
+        // CONC-1: thread-safe — written on the WS snapshot path, read on the book + trades consumer threads.
+        private readonly ConcurrentDictionary<string, VisualHFT.Model.OrderBook> _localOrderBooks = new();
+        // ACC-1: per-symbol raw-DECIMAL mirror of the book, maintained solely to validate Kraken's v2 CRC32
+        // integrity checksum (the double-based display book cannot reproduce the wire precision it needs).
+        // Touched only on the single book-consumer thread (and cleared in ClearAsync after that thread is joined).
+        private readonly ConcurrentDictionary<string, KrakenDecimalBook> _decimalBooks = new();
+        // Per-frame CRC32 validation mode (2026-06-14):
+        //   Off     — don't maintain/check the ladder.
+        //   LogOnly — maintain + check + LOG mismatches, but DO NOT reconnect (safe soak; no feed disruption).
+        //   Enforce — on a confirmed mismatch, drop the frame and resync via the bounded reconnect path.
+        // ENFORCE since 2026-06-14: a ~1.5h live soak across a volatile session logged ZERO per-frame mismatches
+        // and zero reconnects after the depth-truncation fix (ladder now trims to the subscribed depth, matching
+        // Kraken's own book). Desync detection + resync is now armed. Revert to LogOnly if a regression surfaces.
+        private enum ChecksumValidationMode { Off, LogOnly, Enforce }
+        private ChecksumValidationMode _checksumMode = ChecksumValidationMode.Enforce;
+        // PERF-5: value-tuple payloads avoid a per-frame heap Tuple allocation. The isSnapshot flag routes
+        // snapshots through the SAME single-consumer queue as deltas (ACC-4/CONC-4: ordered, race-free book build).
+        private Dictionary<string, HelperCustomQueue<(DateTime ts, string symbol, KrakenBookUpdate data, bool isSnapshot)>> _eventBuffers = new();
+        private Dictionary<string, HelperCustomQueue<(string symbol, KrakenTradeUpdate trade)>> _tradesBuffers = new();
         private readonly object _buffersLock = new object(); // ✅ ADD: Thread-safe buffer access
 
         private int pingFailedAttempts = 0;
@@ -124,8 +141,8 @@ namespace MarketConnectors.Kraken
                 // Initialize event buffer for each symbol
                 foreach (var symbol in GetAllNormalizedSymbols())
                 {
-                    _eventBuffers.Add(symbol, new HelperCustomQueue<Tuple<DateTime, string, KrakenBookUpdate>>($"<Tuple<DateTime, string, KrakenOrderBookEntry>>_{this.Name.Replace(" Plugin", "")}", eventBuffers_onReadAction, eventBuffers_onErrorAction));
-                    _tradesBuffers.Add(symbol, new HelperCustomQueue<Tuple<string, KrakenTradeUpdate>>($"<Tuple<DateTime, string, KrakenOrderBookEntry>>_{this.Name.Replace(" Plugin", "")}", tradesBuffers_onReadAction, tradesBuffers_onErrorAction));
+                    _eventBuffers.Add(symbol, new HelperCustomQueue<(DateTime ts, string symbol, KrakenBookUpdate data, bool isSnapshot)>($"<BookEvent>_{this.Name.Replace(" Plugin", "")}", eventBuffers_onReadAction, eventBuffers_onErrorAction));
+                    _tradesBuffers.Add(symbol, new HelperCustomQueue<(string symbol, KrakenTradeUpdate trade)>($"<TradeEvent>_{this.Name.Replace(" Plugin", "")}", tradesBuffers_onReadAction, tradesBuffers_onErrorAction));
                 }
 
                 //await InitializeSnapshotsAsync(); // Snapshots are now handled in the delta subscription callback
@@ -191,23 +208,31 @@ namespace MarketConnectors.Kraken
             _timerPing?.Stop();
             _timerPing?.Dispose();
 
-            // ✅ FIX: Pause queues before stopping with thread-safe lock
+            // CONC-2: the book/trade consumer threads mutate the OrderBooks (and the shared BookItemPool).
+            // Stop() only signals cancellation — it does NOT join — so disposing the books while a consumer
+            // is mid-AddOrUpdateLevel risks an ObjectDisposedException or a double-free back into the pool.
+            // Collect + clear the maps under the lock, then Dispose() each queue OUTSIDE the lock (Dispose
+            // JOINS the consumer, bounded to 5s) so producers aren't blocked for the whole join, and only
+            // AFTER every consumer is joined do we dispose the books.
+            var queuesToJoin = new List<IDisposable>();
             lock (_buffersLock)
             {
                 foreach (var q in _eventBuffers.Values)
                 {
                     q?.PauseConsumer();
-                    q?.Stop();
+                    if (q != null) queuesToJoin.Add(q);
                 }
                 _eventBuffers.Clear();
 
                 foreach (var q in _tradesBuffers.Values)
                 {
                     q?.PauseConsumer();
-                    q?.Stop();
+                    if (q != null) queuesToJoin.Add(q);
                 }
                 _tradesBuffers.Clear();
             }
+            foreach (var q in queuesToJoin)
+                q.Dispose(); // joins the consumer thread — guarantees no in-flight book mutation remains
 
             deltaSubscriptions.Clear();
             tradesSubscriptions.Clear();
@@ -215,15 +240,13 @@ namespace MarketConnectors.Kraken
             tradePool.Dispose();
             tradePool = new CustomObjectPool<Trade>();
 
-            //CLEAR LOB
-            if (_localOrderBooks != null)
+            //CLEAR LOB — safe now: every consumer has been joined above.
+            foreach (var lob in _localOrderBooks)
             {
-                foreach (var lob in _localOrderBooks)
-                {
-                    lob.Value?.Dispose();
-                }
-                _localOrderBooks.Clear();
+                lob.Value?.Dispose();
             }
+            _localOrderBooks.Clear();
+            _decimalBooks.Clear();
         }
 
         private async Task InitializeTradesAsync()
@@ -243,17 +266,18 @@ namespace MarketConnectors.Kraken
                             try
                             {
                                 // ✅ FIX: Thread-safe buffer access (don't capture reference)
-                                HelperCustomQueue<Tuple<string, KrakenTradeUpdate>> buffer;
+                                HelperCustomQueue<(string symbol, KrakenTradeUpdate trade)> buffer;
                                 lock (_buffersLock)
                                 {
                                     if (!_tradesBuffers.TryGetValue(_normalizedSymbol, out buffer))
                                         return; // Buffer was cleared during reconnection
                                 }
-                                
+
                                 foreach (var item in trade.Data)
                                 {
-                                    item.Timestamp = trade.ReceiveTime; 
-                                    buffer.Add(new Tuple<string, KrakenTradeUpdate>(_normalizedSymbol, item));
+                                    // ACC-3: preserve the exchange's trade execution timestamp; do NOT overwrite it
+                                    // with the local socket ReceiveTime (that destroys latency/replay fidelity).
+                                    buffer.Add((_normalizedSymbol, item));
                                 }
                             }
                             catch (Exception ex)
@@ -402,30 +426,23 @@ namespace MarketConnectors.Kraken
                         {
                             try
                             {
-                                if (data.UpdateType == SocketUpdateType.Update)
-                                {
-                                    CheckFrameFreshnessAndWarn(data.ReceiveTime.ToLocalTime());
+                                // ACC-4/CONC-4: route BOTH snapshot and update frames through the same
+                                // single-consumer queue, so the book is seeded then mutated strictly in order
+                                // on ONE thread (no WS-callback-vs-consumer race, no inline snapshot swap).
+                                // PERF-5: value-tuple payload — no per-frame heap Tuple allocation.
+                                bool isSnapshot = data.UpdateType != SocketUpdateType.Update;
+                                var receiveLocal = data.ReceiveTime.ToLocalTime(); // computed once per frame
+                                if (!isSnapshot)
+                                    CheckFrameFreshnessAndWarn(receiveLocal);
 
-                                    // ✅ FIX: Thread-safe buffer access
-                                    HelperCustomQueue<Tuple<DateTime, string, KrakenBookUpdate>> buffer;
-                                    lock (_buffersLock)
-                                    {
-                                        if (!_eventBuffers.TryGetValue(normalizedSymbol, out buffer))
-                                            return; // Buffer was cleared during reconnection
-                                    }
-                                    
-                                    buffer.Add(new Tuple<DateTime, string, KrakenBookUpdate>(
-                                        data.ReceiveTime.ToLocalTime(), normalizedSymbol, data.Data));
-                                }
-                                else
+                                HelperCustomQueue<(DateTime ts, string symbol, KrakenBookUpdate data, bool isSnapshot)> buffer;
+                                lock (_buffersLock)
                                 {
-                                    if (!_localOrderBooks.ContainsKey(normalizedSymbol))
-                                    {
-                                        _localOrderBooks.Add(normalizedSymbol, null);
-                                    }
-                                    _localOrderBooks[normalizedSymbol] = ToOrderBookModel(data.Data, normalizedSymbol);
-                                    //UpdateOrderBookSnapshot(data.Data, normalizedSymbol);
+                                    if (!_eventBuffers.TryGetValue(normalizedSymbol, out buffer))
+                                        return; // Buffer was cleared during reconnection
                                 }
+
+                                buffer.Add((receiveLocal, normalizedSymbol, data.Data, isSnapshot));
                             }
                             catch (Exception ex)
                             {
@@ -466,10 +483,7 @@ namespace MarketConnectors.Kraken
             foreach (var symbol in GetAllNonNormalizedSymbols())
             {
                 var normalizedSymbol = GetNormalizedSymbol(symbol);
-                if (!_localOrderBooks.ContainsKey(normalizedSymbol))
-                {
-                    _localOrderBooks.Add(normalizedSymbol, null);
-                }
+                _localOrderBooks.TryAdd(normalizedSymbol, null);
                 log.Info($"{this.Name}: Getting snapshot {normalizedSymbol} level 2");
 
                 // Fetch initial depth snapshot
@@ -497,9 +511,12 @@ namespace MarketConnectors.Kraken
             _timerPing.Enabled = true; // Start the timer
         }
 
-        private void eventBuffers_onReadAction(Tuple<DateTime, string, KrakenBookUpdate> eventData)
+        private void eventBuffers_onReadAction((DateTime ts, string symbol, KrakenBookUpdate data, bool isSnapshot) e)
         {
-            UpdateOrderBook(eventData.Item3, eventData.Item2, eventData.Item1);
+            if (e.isSnapshot)
+                ApplySnapshot(e.data, e.symbol, e.ts);
+            else
+                UpdateOrderBook(e.data, e.symbol, e.ts);
         }
         private void eventBuffers_onErrorAction(Exception ex)
         {
@@ -508,7 +525,7 @@ namespace MarketConnectors.Kraken
             LogException(ex, _error);
             Task.Run(async () => await HandleConnectionLost(_error, ex));
         }
-        private void tradesBuffers_onReadAction(Tuple<string, KrakenTradeUpdate> item)
+        private void tradesBuffers_onReadAction((string symbol, KrakenTradeUpdate trade) item)
         {
             var trade = tradePool.Get();
             trade.Price = item.Item2.Price;
@@ -735,127 +752,118 @@ namespace MarketConnectors.Kraken
                 });
             }
         }
+        // Live snapshot handler. Runs on the single book-consumer thread, strictly in order with deltas
+        // (ACC-4/CONC-4), so the display book and the decimal ladder are always built before any delta.
+        private void ApplySnapshot(KrakenBookUpdate data, string symbol, DateTime ts)
+        {
+            var lob = ToOrderBookModel(data, symbol);
+            lob.LastUpdated = ts;
+            _localOrderBooks[symbol] = lob; // ConcurrentDictionary: atomic publish of the fresh book
+
+            // Seed the decimal ladder from the RAW exchange decimals (used for the CRC32 integrity check).
+            // Pass the symbol precision so the checksum reconstructs wire trailing zeros even if the library
+            // deserializer dropped them (lob.PriceDecimalPlaces/SizeDecimalPlaces were just derived from this snapshot).
+            var ladder = _decimalBooks.GetOrAdd(symbol, static _ => new KrakenDecimalBook());
+            // Pass the subscribed depth so the ladder stays trimmed to exactly what Kraken retains (it drops
+            // out-of-window levels without a qty=0 delete); otherwise ghost levels accumulate and break the CRC32.
+            ladder.Reset(ToLevels(data.Asks), ToLevels(data.Bids), lob.PriceDecimalPlaces, lob.SizeDecimalPlaces, _settings.DepthLevels);
+
+            RaiseOnDataReceived(lob);
+        }
+
         private void UpdateOrderBook(KrakenBookUpdate lob_update, string symbol, DateTime ts)
         {
-            if (!_localOrderBooks.TryGetValue(symbol, out VisualHFT.Model.OrderBook? local_lob))
+            if (!_localOrderBooks.TryGetValue(symbol, out VisualHFT.Model.OrderBook? local_lob) || local_lob == null)
                 return;
-            if (local_lob != null)
+
+            // ACC-1/ACC-2: when integrity validation is enabled, mirror each delta into the decimal ladder in
+            // the SAME pass that updates the display book — zero extra allocation (no ToLevels iterator, no
+            // second enumeration). Kraken provides NO sequence numbers, so the CRC32 is the only desync detector.
+            // The offline test-injection seam never seeds the ladder, so this is inert there.
+            KrakenDecimalBook? ladder = null;
+            bool validate = _checksumMode != ChecksumValidationMode.Off
+                            && _decimalBooks.TryGetValue(symbol, out ladder)
+                            && ladder.IsSeeded;
+
+            var now = DateTime.Now; // PERF-4: one wall-clock read per frame, reused across every level
+            try
             {
-                try
+                foreach (var item in lob_update.Bids)
                 {
-                    foreach (var item in lob_update.Bids)
-                    {
-                        if (item.Quantity == 0 && item.Price == 0 || item.Quantity < 0)
-                            continue;
-                        if (item.Quantity != 0)
-                        {
-                            local_lob.AddOrUpdateLevel(new DeltaBookItem()
-                            {
-                                MDUpdateAction = eMDUpdateAction.Change,
-                                Price = (double)item.Price,
-                                Size = (double)item.Quantity,
-                                IsBid = true,
-                                LocalTimeStamp = DateTime.Now,
-                                ServerTimeStamp = ts,
-                                Symbol = symbol
-                            });
-                        }
-                        else if (item.Quantity == 0)
-                            local_lob.DeleteLevel(new DeltaBookItem()
-                            {
-                                MDUpdateAction = eMDUpdateAction.Delete,
-                                Price = (double)item.Price,
-                                IsBid = true,
-                                LocalTimeStamp = DateTime.Now,
-                                ServerTimeStamp = ts,
-                                Symbol = symbol
-                            });
-                    }
-                    foreach (var item in lob_update.Asks)
-                    {
-                        if (item.Quantity == 0 && item.Price == 0 || item.Quantity < 0)
-                            continue;
-                        if (item.Quantity != 0)
-                        {
-                            local_lob.AddOrUpdateLevel(new DeltaBookItem()
-                            {
-                                MDUpdateAction = eMDUpdateAction.None,
-                                Price = (double)item.Price,
-                                Size = (double)item.Quantity,
-                                IsBid = false,
-                                LocalTimeStamp = DateTime.Now,
-                                ServerTimeStamp = ts,
-                                Symbol = symbol
-                            });
-                        }
-                        else if (item.Quantity == 0)
-                            local_lob.DeleteLevel(new DeltaBookItem()
-                            {
-                                MDUpdateAction = eMDUpdateAction.Delete,
-                                Price = (double)item.Price,
-                                IsBid = false,
-                                LocalTimeStamp = DateTime.Now,
-                                ServerTimeStamp = ts,
-                                Symbol = symbol
-                            });
-                    }
-
+                    if (item.Quantity == 0 && item.Price == 0 || item.Quantity < 0)
+                        continue;
+                    // PERF-1: allocation-free primitive overloads (no per-level DeltaBookItem), mirroring KuCoin.
+                    if (item.Quantity != 0)
+                        local_lob.AddOrUpdateLevel(true, string.Empty, (double)item.Price, (double)item.Quantity, now, ts);
+                    else
+                        local_lob.DeleteLevel(true, string.Empty, (double)item.Price, (double)item.Quantity);
+                    if (validate)
+                        ladder!.ApplyBid(item.Price, item.Quantity);
                 }
-                catch (Exception e)
+                foreach (var item in lob_update.Asks)
                 {
-                    LogException(e, $"Error updating LOB for {symbol}.");
-                    throw;
+                    if (item.Quantity == 0 && item.Price == 0 || item.Quantity < 0)
+                        continue;
+                    if (item.Quantity != 0)
+                        local_lob.AddOrUpdateLevel(false, string.Empty, (double)item.Price, (double)item.Quantity, now, ts);
+                    else
+                        local_lob.DeleteLevel(false, string.Empty, (double)item.Price, (double)item.Quantity);
+                    if (validate)
+                        ladder!.ApplyAsk(item.Price, item.Quantity);
                 }
-
-
-                //CHECK IF THE CHECKSUM IS THE SAME
-                /*var localCheckSum = GenerateLOBChecksum(local_lob);
-                if (lob_update.Checksum != localCheckSum)
-                {
-                    return;
-                }*/
-                local_lob.LastUpdated = ts;
-                RaiseOnDataReceived(local_lob);
             }
-        }
-
-        private string FormatValue(string strValue)
-        {
-            // Convert using InvariantCulture to ensure dot is used as decimal separator
-            //string strValue = value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            // Remove the decimal point
-            strValue = strValue.Replace(".", "");
-            // Remove all leading zeros
-            strValue = strValue.TrimStart('0');
-            // Ensure that an empty string becomes "0"
-            return string.IsNullOrEmpty(strValue) ? "0" : strValue;
-        }
-        private string GenerateLevelString(IEnumerable<VisualHFT.Model.BookItem> levels)
-        {
-            System.Text.StringBuilder sb = new System.Text.StringBuilder();
-            foreach (var item in levels)
+            catch (Exception e)
             {
-                // Format price and size following the instructions
-                string formattedPrice = FormatValue(item.FormattedPrice);
-                string formattedSize = FormatValue(item.FormattedSize);
-                sb.Append(formattedPrice);
-                sb.Append(formattedSize);
+                LogException(e, $"Error updating LOB for {symbol}.");
+                throw;
             }
-            return sb.ToString();
+
+            if (validate)
+            {
+                // Kraken drops out-of-window levels without a qty=0 delete, so trim the ladder to the subscribed
+                // depth every frame (once, after the whole frame is applied) — exactly what Kraken retains.
+                ladder!.TrimToDepth();
+
+                if (HasChecksum(lob_update))
+                {
+                    uint localChecksum = ladder.ComputeChecksum();
+                    uint exchangeChecksum = unchecked((uint)lob_update.Checksum);
+                    if (localChecksum != exchangeChecksum)
+                    {
+                        if (_checksumMode == ChecksumValidationMode.Enforce)
+                        {
+                            // Do NOT publish a corrupted book — drop it and resync via the bounded reconnect path.
+                            var _error = $"Order book checksum mismatch for {symbol} (local={localChecksum}, exchange={exchangeChecksum}). Resyncing.";
+                            log.Warn(_error);
+                            ladder.Clear(); // stop re-triggering for this symbol until a fresh snapshot reseeds it
+                            Task.Run(async () => await HandleConnectionLost(_error));
+                            return;
+                        }
+
+                        // LogOnly soak: surface the divergence but keep the feed running (no reconnect). A clean
+                        // soak (zero of these lines over a long volatile session) gates switching to Enforce.
+                        log.Warn($"{this.Name}: checksum mismatch (LOG-ONLY, feed continues) for {symbol} (local={localChecksum}, exchange={exchangeChecksum}).");
+                    }
+                }
+            }
+
+            local_lob.LastUpdated = ts;
+            RaiseOnDataReceived(local_lob);
         }
 
-        private long GenerateLOBChecksum(VisualHFT.Model.OrderBook lob)
+        // Projects Kraken's raw (decimal) book entries into (price, quantity) pairs for the integrity ladder,
+        // preserving the wire scale the CRC32 depends on (no double round-trip).
+        private static IEnumerable<KeyValuePair<decimal, decimal>> ToLevels(IEnumerable<KrakenBookUpdateEntry> entries)
         {
-
-            string asksString = GenerateLevelString(lob.Asks.Take(10));
-            string bidsString = GenerateLevelString(lob.Bids.Take(10));
-
-            // 1. Generate the concatenated checksum string from asks and bids
-            string checksumInput = asksString + bidsString;
-
-            // 2. Compute and return the CRC32 checksum of the concatenated string
-            return Crc32Calculator.ComputeCrc32(checksumInput);
+            if (entries == null)
+                yield break;
+            foreach (var e in entries)
+                yield return new KeyValuePair<decimal, decimal>(e.Price, e.Quantity);
         }
+
+        // Kraken omits/zeroes the checksum only when it is absent; the offline test seam also leaves it 0.
+        private static bool HasChecksum(KrakenBookUpdate data) => unchecked((uint)data.Checksum) != 0u;
+
         protected override void Dispose(bool disposing)
         {
             if (!_disposed)
@@ -868,11 +876,17 @@ namespace MarketConnectors.Kraken
                     foreach (var sub in tradesSubscriptions.Values)
                         UnattachEventHandlers(sub?.Data);
                     
-                    _socketClient?.UnsubscribeAllAsync();
+                    // LIFE-4: wait (bounded) for the unsubscribe to actually complete before disposing the
+                    // socket client, instead of fire-and-forget which abandons the unsubscribe. Mirrors KuCoin.
+                    try
+                    {
+                        _socketClient?.UnsubscribeAllAsync().Wait(TimeSpan.FromSeconds(5));
+                    }
+                    catch (Exception) { /* best-effort during dispose */ }
                     _socketClient?.Dispose();
                     _restClient?.Dispose();
                     _timerPing?.Dispose();
-                    
+
                     // ✅ FIX: Dispose semaphore
                     _startStopLock?.Dispose();
 
@@ -884,14 +898,10 @@ namespace MarketConnectors.Kraken
                         q.Value?.Dispose();
                     _tradesBuffers.Clear();
 
-                    if (_localOrderBooks != null)
-                    {
-                        foreach (var lob in _localOrderBooks)
-                        {
-                            lob.Value?.Dispose();
-                        }
-                        _localOrderBooks.Clear();
-                    }
+                    foreach (var lob in _localOrderBooks)
+                        lob.Value?.Dispose();
+                    _localOrderBooks.Clear();
+                    _decimalBooks.Clear();
 
                     base.Dispose();
                 }
@@ -990,12 +1000,7 @@ namespace MarketConnectors.Kraken
 
             var symbol = snapshotModel.Symbol;
 
-            if (!_localOrderBooks.ContainsKey(symbol))
-            {
-                _localOrderBooks.Add(symbol, ToOrderBookModel(localModel, symbol));
-            }
-            else
-                _localOrderBooks[symbol] = ToOrderBookModel(localModel, symbol);
+            _localOrderBooks[symbol] = ToOrderBookModel(localModel, symbol); // ConcurrentDictionary indexer: add-or-replace
             //then this method is called from the delta websocket
             UpdateOrderBookSnapshot(new KrakenBookUpdate()
             {

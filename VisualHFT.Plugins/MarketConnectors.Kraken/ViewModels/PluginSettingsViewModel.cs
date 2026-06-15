@@ -26,6 +26,9 @@ namespace MarketConnectors.Kraken.ViewModel
         private string _validationMessage;
         private string _successMessage;
         private Action _actionCloseWindow;
+        // API-4: Kraken's WS v2 book channel only accepts these depths. Rejecting anything else stops the UI
+        // from saving a depth that throws "Unsuccessful deltas subscription" and loops reconnecting.
+        private static readonly int[] _allowedDepthLevels = { 10, 25, 100, 500, 1000 };
         public ICommand OkCommand { get; private set; }
         public ICommand CancelCommand { get; private set; }
         public Action UpdateSettingsFromUI{ get; set; }
@@ -156,8 +159,8 @@ namespace MarketConnectors.Kraken.ViewModel
                         break;
 
                     case nameof(DepthLevels):
-                        if (DepthLevels <= 0)
-                            return "Depth levels should be a positive integer.";
+                        if (!_allowedDepthLevels.Contains(DepthLevels))
+                            return "Kraken supports order book depth of 10, 25, 100, 500, or 1000.";
                         break;
 
                     case nameof(UpdateIntervalMs):
