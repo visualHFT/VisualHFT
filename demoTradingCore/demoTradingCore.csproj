@@ -67,16 +67,16 @@
     <PackageReference Include="DigitalRuby.ExchangeSharp" Version="1.2.1" />
     <PackageReference Include="EntityFramework" Version="6.5.2" />
     <PackageReference Include="Microsoft.AspNet.SignalR.Client" Version="2.4.3" />
-    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Bcl.Memory" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Bcl.TimeProvider" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Extensions.Primitives" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Identity.Abstractions" Version="12.0.0" />
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Bcl.Memory" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Bcl.TimeProvider" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Primitives" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Identity.Abstractions" Version="12.1.0" />
     <PackageReference Include="Microsoft.IdentityModel.Abstractions" Version="8.19.1" />
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.19.1" />
     <PackageReference Include="Microsoft.IdentityModel.Logging" Version="8.19.1" />
@@ -91,19 +91,19 @@
     <PackageReference Include="SocketIOClient.Serializer" Version="4.0.0.1" />
     <PackageReference Include="SocketIOClient.Serializer.NewtonsoftJson" Version="4.0.0.1" />
     <PackageReference Include="System.Collections" Version="4.3.0" />
-    <PackageReference Include="System.Configuration.ConfigurationManager" Version="10.0.8" />
-    <PackageReference Include="System.Diagnostics.DiagnosticSource" Version="10.0.8" />
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="10.0.9" />
+    <PackageReference Include="System.Diagnostics.DiagnosticSource" Version="10.0.9" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.19.1" />
     <PackageReference Include="System.IO" Version="4.3.0" />
-    <PackageReference Include="System.IO.Pipelines" Version="10.0.8" />
+    <PackageReference Include="System.IO.Pipelines" Version="10.0.9" />
     <PackageReference Include="System.Net.Http" Version="4.3.4" />
     <PackageReference Include="System.Reactive" Version="6.1.0" />
     <PackageReference Include="System.Runtime" Version="4.3.1" />
     <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.1.2" />
     <PackageReference Include="System.Security.AccessControl" Version="6.0.1" />
-    <PackageReference Include="System.Security.Permissions" Version="10.0.8" />
-    <PackageReference Include="System.Text.Encodings.Web" Version="10.0.8" />
-    <PackageReference Include="System.Text.Json" Version="10.0.8" />
+    <PackageReference Include="System.Security.Permissions" Version="10.0.9" />
+    <PackageReference Include="System.Text.Encodings.Web" Version="10.0.9" />
+    <PackageReference Include="System.Text.Json" Version="10.0.9" />
     <PackageReference Include="WatsonWebsocket" Version="4.1.8" />
   </ItemGroup>
   <ItemGroup Label="Compile items now included by globbing that were not in the original project file">
