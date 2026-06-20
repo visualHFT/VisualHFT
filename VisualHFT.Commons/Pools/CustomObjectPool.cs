@@ -599,6 +599,8 @@ namespace VisualHFT.Commons.Pools
         public long TotalCreated => Volatile.Read(ref _totalCreated);
         public int SegmentCount => Volatile.Read(ref _activeSegmentCount);
         public int SegmentSize => _segmentSize;
+        public int MaxSegmentCount => MAX_SEGMENTS;
+
         public long GrowthCount => Volatile.Read(ref _growthCount);
 
         public bool IsHealthy => UtilizationPercentage < 0.90 && !_disposed;

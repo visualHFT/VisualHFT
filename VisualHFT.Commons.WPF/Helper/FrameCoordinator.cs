@@ -30,6 +30,20 @@ namespace VisualHFT.Helpers
         private int _roundRobinIndex;
         private bool _disposed;
 
+        // Guards _participants against concurrent mutation. Register is always reached on the UI
+        // thread (UIUpdater's constructor enforces it), but Unregister runs from UIUpdater.Dispose,
+        // which a plugin can dispose on a BACKGROUND thread (e.g. the replay session clone-swap
+        // stopping plugins off the dispatcher). Without this lock a concurrent Remove shrinks the
+        // list mid-tick and OnFrameTick's indexer throws IndexOutOfRange — crashing the app.
+        private readonly object _sync = new object();
+        // Reusable per-frame buffer: OnFrameTick copies the live participant set into this UNDER the
+        // lock, then iterates the copy with the lock released so participant callbacks never run
+        // while holding _sync (a callback may itself register/unregister). Reused to stay alloc-free.
+        private readonly List<FrameParticipant> _frameSnapshot = new List<FrameParticipant>();
+        // The dispatcher that owns _frameTimer. DispatcherTimer.Start/Stop are thread-affine, so when
+        // Register/Unregister are reached from a non-owning thread the Start/Stop is marshaled here.
+        private readonly Dispatcher _dispatcher;
+
         /// <summary>
         /// Maximum time budget per frame in milliseconds.
         /// Participants that exceed this budget are deferred to the next frame.
@@ -48,13 +62,14 @@ namespace VisualHFT.Helpers
         }
 
         // Diagnostics
-        public int ParticipantCount => _participants.Count;
+        public int ParticipantCount { get { lock (_sync) { return _participants.Count; } } }
         public int LastFrameParticipantsRun { get; private set; }
         public double LastFrameBudgetUsedMs { get; private set; }
         public int SkippedCount { get; private set; }
 
         private FrameCoordinator()
         {
+            _dispatcher = Dispatcher.CurrentDispatcher;
             _frameTimer = new DispatcherTimer(DispatcherPriority.Input);
             _frameTimer.Interval = TimeSpan.FromMilliseconds(16);
             _frameTimer.Tick += OnFrameTick;
@@ -69,13 +84,17 @@ namespace VisualHFT.Helpers
         public FrameParticipant Register(Action callback, double intervalMs)
         {
             var participant = new FrameParticipant(callback, intervalMs);
-            _participants.Add(participant);
 
-            // Auto-start the frame timer when first participant registers
-            if (_participants.Count == 1)
+            bool startTimer;
+            lock (_sync)
             {
-                _frameTimer.Start();
+                _participants.Add(participant);
+                // Auto-start the frame timer when first participant registers
+                startTimer = _participants.Count == 1;
             }
+
+            if (startTimer)
+                SetTimerRunning(true);
 
             return participant;
         }
@@ -87,18 +106,52 @@ namespace VisualHFT.Helpers
         {
             if (participant == null) return;
 
-            _participants.Remove(participant);
-
-            // Auto-stop when no participants
-            if (_participants.Count == 0)
+            bool stopTimer;
+            lock (_sync)
             {
-                _frameTimer.Stop();
+                _participants.Remove(participant);
+                // Auto-stop when no participants
+                stopTimer = _participants.Count == 0;
+            }
+
+            if (stopTimer)
+                SetTimerRunning(false);
+        }
+
+        // Starts/stops _frameTimer on its owning dispatcher. Register always runs on the UI thread,
+        // but Unregister can be reached from a background thread (off-thread UIUpdater.Dispose); a
+        // cross-thread Start/Stop on a DispatcherTimer would throw, so marshal when off-thread.
+        private void SetTimerRunning(bool running)
+        {
+            if (_dispatcher.CheckAccess())
+            {
+                if (running) _frameTimer.Start();
+                else _frameTimer.Stop();
+            }
+            else
+            {
+                _dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (running) _frameTimer.Start();
+                    else _frameTimer.Stop();
+                }));
             }
         }
 
         private void OnFrameTick(object? sender, EventArgs e)
         {
-            if (_participants.Count == 0) return;
+            // Copy the live participant set into a reusable buffer UNDER the lock, then release the
+            // lock before touching any participant. Participants can be registered/unregistered from
+            // non-UI threads (a plugin's UIUpdater disposed during a background session swap), so
+            // iterating the live list directly would race a concurrent Remove and throw.
+            lock (_sync)
+            {
+                _frameSnapshot.Clear();
+                _frameSnapshot.AddRange(_participants);
+            }
+
+            int count = _frameSnapshot.Count;
+            if (count == 0) return;
 
             _frameStopwatch.Restart();
             int participantsRun = 0;
@@ -106,12 +159,11 @@ namespace VisualHFT.Helpers
             long nowTicks = Stopwatch.GetTimestamp();
             double tickFrequency = Stopwatch.Frequency / 1000.0; // ticks per ms
 
-            // Round-robin through participants starting from where we left off
-            int count = _participants.Count;
+            // Round-robin through the snapshot starting from where we left off
             for (int i = 0; i < count; i++)
             {
                 int index = (_roundRobinIndex + i) % count;
-                var participant = _participants[index];
+                var participant = _frameSnapshot[index];
 
                 if (!participant.IsActive) continue;
 
@@ -149,15 +201,22 @@ namespace VisualHFT.Helpers
             LastFrameParticipantsRun = participantsRun;
             LastFrameBudgetUsedMs = _frameStopwatch.Elapsed.TotalMilliseconds;
             SkippedCount = skipped;
+
+            // Release references so the buffer doesn't pin participants between frames.
+            _frameSnapshot.Clear();
         }
 
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
-            _frameTimer.Stop();
+            SetTimerRunning(false);
             _frameTimer.Tick -= OnFrameTick;
-            _participants.Clear();
+            lock (_sync)
+            {
+                _participants.Clear();
+            }
+            _frameSnapshot.Clear();
         }
     }
 

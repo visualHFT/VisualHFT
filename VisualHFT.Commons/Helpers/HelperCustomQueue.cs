@@ -59,6 +59,8 @@ public class HelperCustomQueue<T> : IDisposable
     public long TotalMessagesAdded => Volatile.Read(ref _totalMessagesAdded);
     public long TotalMessagesProcessed => Volatile.Read(ref _totalMessagesProcessed);
     public int CurrentQueueDepth => _disposed ? 0 : (int)Volatile.Read(ref _currentDepth);
+    public bool IsMonitoringEnabled => _monitorHealth;
+
     public bool IsBounded => _isBounded;
     public int HealthyThreshold => _healthyThreshold;
     public int WarningThreshold => _warningThreshold;
@@ -68,7 +70,9 @@ public class HelperCustomQueue<T> : IDisposable
         {
             var processed = Volatile.Read(ref _totalMessagesProcessed);
             var totalTime = Volatile.Read(ref _totalProcessingTimeTicks);
-            return processed > 0 ? (totalTime / (double)processed) / 10.0 : 0; // Convert ticks to microseconds
+            return processed > 0
+                ? (totalTime / (double)processed) * 1_000_000.0 / Stopwatch.Frequency
+                : 0;
         }
     }
 
@@ -379,7 +383,7 @@ public class HelperCustomQueue<T> : IDisposable
     {
         var currentAdded = Volatile.Read(ref _totalMessagesAdded);
         var currentProcessed = Volatile.Read(ref _totalMessagesProcessed);
-        var intervalSeconds = (currentTicks - lastReportTicks) / (double)TimeSpan.TicksPerSecond;
+        var intervalSeconds = (currentTicks - lastReportTicks) / (double)Stopwatch.Frequency;
 
         var addedInInterval = currentAdded - _lastReportAdded;
         var processedInInterval = currentProcessed - _lastReportProcessed;
