@@ -1,3 +1,9 @@
+# Kalshi fork
+This is a personal fork of [visualHFT/VisualHFT](https://github.com/visualHFT/VisualHFT)
+that adds UI for trading prediction markets on Kalshi. The data-feed plugin
+lives in a separate repo. **See [README.Kalshi.md](README.Kalshi.md) for the
+two-repo setup.**
+
 # Release Notes
 See details [here](#release-notes-1)
 

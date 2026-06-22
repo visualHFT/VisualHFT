@@ -7,6 +7,7 @@
         APPLICATION_INITIALIZATION_SIZE_HEIGHT,
         TILE_STUDY,
         PLUGIN,
+        KALSHI_LADDER_DEPTH_CHART,
         // Add more settings here
     }
 

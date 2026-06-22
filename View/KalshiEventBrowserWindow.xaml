@@ -1,0 +1,136 @@
+<Window x:Class="VisualHFT.View.KalshiEventBrowserWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="Kalshi — Events Browser"
+        Height="720" Width="1200"
+        Background="#FF1A1A1A"
+        TextElement.Foreground="White"
+        FontFamily="Consolas"
+        FontSize="13">
+    <Window.Resources>
+        <Style TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#FF252526"/>
+            <Setter Property="Foreground" Value="#FFCCCCCC"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Padding" Value="6,4"/>
+        </Style>
+        <Style TargetType="DataGridCell">
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="6,3"/>
+            <Setter Property="Background" Value="Transparent"/>
+        </Style>
+        <Style TargetType="DataGridRow">
+            <Setter Property="Background" Value="#FF1F1F1F"/>
+            <Setter Property="Foreground" Value="#FFCCCCCC"/>
+        </Style>
+        <Style TargetType="TabItem">
+            <Setter Property="Background" Value="#FF252526"/>
+            <Setter Property="Foreground" Value="#FFCCCCCC"/>
+            <Setter Property="Padding" Value="12,6"/>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel LastChildFill="True">
+        <Border DockPanel.Dock="Top" Background="#FF252526" Padding="14,10">
+            <StackPanel>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding BrowserTitle}" FontSize="16" FontWeight="Bold" Foreground="White"/>
+                    <TextBlock Text="{Binding StatusText}" Foreground="#FF999999" VerticalAlignment="Center" Margin="20,0,0,0"/>
+                    <Button x:Name="RefreshBtn" Content="↻ Refresh" Margin="20,0,0,0" Padding="10,2" Click="RefreshBtn_Click"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <TextBlock Text="🔍 Search:" Foreground="#FFAAAAAA" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBox x:Name="SearchInput" Width="380" VerticalAlignment="Center"
+                             Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="Filter every category by ticker / series / title / subtitle. Case-insensitive substring."/>
+                    <TextBlock Text="🎯 Venue:" Foreground="#FFAAAAAA" VerticalAlignment="Center" Margin="20,0,6,0"/>
+                    <ComboBox x:Name="VenueCombo" Width="140" VerticalAlignment="Center"
+                              SelectedValuePath="Content"
+                              SelectedValue="{Binding SelectedVenue, Mode=TwoWay}"
+                              ToolTip="Switch the event catalog between Kalshi and Polymarket.">
+                        <ComboBoxItem Content="Kalshi"/>
+                        <ComboBoxItem Content="Polymarket"/>
+                    </ComboBox>
+                    <TextBlock Text="    Filtering all categories live." Foreground="#FF777777" FontSize="10" VerticalAlignment="Center" Margin="20,0,0,0"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <TabControl x:Name="GroupsTabs"
+                    ItemsSource="{Binding Groups}"
+                    Background="#FF1A1A1A"
+                    BorderThickness="0"
+                    MouseDoubleClick="GroupsTabs_MouseDoubleClick">
+            <TabControl.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding Header}" FontWeight="SemiBold"/>
+                </DataTemplate>
+            </TabControl.ItemTemplate>
+            <TabControl.ContentTemplate>
+                <DataTemplate>
+                    <DataGrid ItemsSource="{Binding FilteredEvents}"
+                              AutoGenerateColumns="False"
+                              CanUserAddRows="False"
+                              CanUserDeleteRows="False"
+                              CanUserSortColumns="True"
+                              IsReadOnly="True"
+                              HeadersVisibility="Column"
+                              GridLinesVisibility="Horizontal"
+                              HorizontalGridLinesBrush="#FF2D2D30"
+                              Background="#FF1A1A1A"
+                              BorderThickness="0">
+                        <DataGrid.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="📋 Add to Watch List (no chart)" Click="AddToWatchList_Click"/>
+                                <MenuItem Header="📊 Watch + Load Chart"           Click="WatchAndLoadChart_Click"/>
+                                <Separator/>
+                                <MenuItem Header="📁 Show all markets in Strike Ladder" Click="ShowInStrikeLadder_Click"/>
+                            </ContextMenu>
+                        </DataGrid.ContextMenu>
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="OI"            Binding="{Binding OpenInterestText}" SortMemberPath="OpenInterest" Width="80">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="#FFFFD54F"/>
+                                        <Setter Property="FontWeight" Value="Bold"/>
+                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="Volume"        Binding="{Binding VolumeText}" SortMemberPath="Volume" Width="80">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="#FF8AB4F8"/>
+                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="Mkts"          Binding="{Binding MarketCount}" Width="50">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="#FF999999"/>
+                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="Event Ticker"  Binding="{Binding EventTicker}"  Width="220">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="#FF8AB4F8"/>
+                                        <Setter Property="FontWeight" Value="SemiBold"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="Series"        Binding="{Binding SeriesTicker}" Width="140"/>
+                            <DataGridTextColumn Header="Title"         Binding="{Binding Title}"        Width="380"/>
+                            <DataGridTextColumn Header="Sub-title"     Binding="{Binding SubTitle}"     Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DataTemplate>
+            </TabControl.ContentTemplate>
+        </TabControl>
+    </DockPanel>
+</Window>

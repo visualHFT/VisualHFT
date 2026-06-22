@@ -242,6 +242,11 @@ namespace VisualHFT.ViewModel
             HelperTrade.Instance.Subscribe(TRADES_OnDataReceived);
             HelperOrderBook.Instance.Subscribe(LIMITORDERBOOK_OnDataReceived);
 
+            // Cross-window navigation: Watch List / Strike Ladder / Events Browser
+            // fire KalshiViewRequest.Show(symbol, providerId) when the user
+            // double-clicks a row. We honor it by selecting that provider+symbol
+            // here so the chart on the right populates.
+            VisualHFT.Helpers.KalshiViewRequest.OnRequest += OnKalshiViewRequested;
 
             _BidTOB_SPLIT = new Model.BookItemPriceSplit();
             _AskTOB_SPLIT = new Model.BookItemPriceSplit();
@@ -260,6 +265,24 @@ namespace VisualHFT.ViewModel
         ~vmOrderBook()
         {
             Dispose(false);
+        }
+
+        private void OnKalshiViewRequested(string symbol, int providerId)
+        {
+            try
+            {
+                Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    var prov = _providers?.FirstOrDefault(p => p.ProviderID == providerId);
+                    if (prov != null && SelectedProvider != prov) SelectedProvider = prov;
+                    if (!string.IsNullOrEmpty(symbol) && SelectedSymbol != symbol)
+                    {
+                        if (!_symbols.Contains(symbol)) _symbols.Add(symbol);
+                        SelectedSymbol = symbol;
+                    }
+                }));
+            }
+            catch { /* best-effort, never crash on view request */ }
         }
 
         private void InitializeRealTimePriceChart()
@@ -467,10 +490,13 @@ namespace VisualHFT.ViewModel
             CummulativeAsksChartModel.PlotAreaBorderColor = OxyColors.White;
             CummulativeAsksChartModel.PlotAreaBorderThickness = new OxyThickness(0);
 
+            // Cumulative-depth X axes. Auto-scale so this works for any provider.
+            // Kalshi-specific axis lock (0-100 cents) is now conditional — applied per-symbol
+            // in UpdateKalshiChartScale() when SelectedSymbol changes.
             var xAxis = new OxyPlot.Axes.LinearAxis
             {
                 Position = AxisPosition.Bottom,
-                StringFormat = "N", // Format time as hours:minutes:seconds
+                StringFormat = "N",
                 FontSize = 8,
                 AxislineColor = OxyColors.White,
                 TicklineColor = OxyColors.White,
@@ -494,7 +520,7 @@ namespace VisualHFT.ViewModel
             var xAxis2 = new OxyPlot.Axes.LinearAxis
             {
                 Position = AxisPosition.Bottom,
-                StringFormat = "N", // Format time as hours:minutes:seconds
+                StringFormat = "N",
                 FontSize = 8,
                 AxislineColor = OxyColors.White,
                 TicklineColor = OxyColors.White,

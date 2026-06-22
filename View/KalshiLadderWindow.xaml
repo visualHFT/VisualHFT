@@ -1,0 +1,288 @@
+<Window x:Class="VisualHFT.View.KalshiLadderWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:oxy="clr-namespace:OxyPlot.SkiaSharp.Wpf;assembly=OxyPlot.SkiaSharp.Wpf"
+        xmlns:converters="clr-namespace:VisualHFT.Converters"
+        mc:Ignorable="d"
+        Title="{Binding WindowTitle}"
+        Height="720" Width="520"
+        Background="#FF1A1A1A"
+        TextElement.Foreground="White"
+        FontFamily="Consolas"
+        FontSize="14"
+        PreviewKeyDown="Window_PreviewKeyDown">
+    <Window.Resources>
+        <converters:BoolToVisibilityConverter x:Key="BoolToVis"/>
+        <Style x:Key="ChipBtn" TargetType="Button">
+            <Setter Property="Background" Value="#FF333333"/>
+            <Setter Property="Foreground" Value="#FFAAAAAA"/>
+            <Setter Property="BorderBrush" Value="#FF555555"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="6,1"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="MinWidth" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ChipBtnUnitContracts" TargetType="Button" BasedOn="{StaticResource ChipBtn}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsUnitContracts}" Value="True">
+                    <Setter Property="Background" Value="#FF1565C0"/>
+                    <Setter Property="Foreground" Value="White"/>
+                    <Setter Property="BorderBrush" Value="#FF42A5F5"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="ChipBtnUnitNotional" TargetType="Button" BasedOn="{StaticResource ChipBtn}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsUnitNotional}" Value="True">
+                    <Setter Property="Background" Value="#FF1565C0"/>
+                    <Setter Property="Foreground" Value="White"/>
+                    <Setter Property="BorderBrush" Value="#FF42A5F5"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="ChipBtnUnitPercent" TargetType="Button" BasedOn="{StaticResource ChipBtn}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsUnitPercent}" Value="True">
+                    <Setter Property="Background" Value="#FF1565C0"/>
+                    <Setter Property="Foreground" Value="White"/>
+                    <Setter Property="BorderBrush" Value="#FF42A5F5"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="ChipBtnDepthToggle" TargetType="Button" BasedOn="{StaticResource ChipBtn}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding ShowDepthChart}" Value="True">
+                    <Setter Property="Background" Value="#FF1565C0"/>
+                    <Setter Property="Foreground" Value="White"/>
+                    <Setter Property="BorderBrush" Value="#FF42A5F5"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#FF252526"/>
+            <Setter Property="Foreground" Value="#FF999999"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="HorizontalContentAlignment" Value="Right"/>
+        </Style>
+        <Style TargetType="DataGridCell">
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="6,2"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="HorizontalContentAlignment" Value="Right"/>
+        </Style>
+        <Style x:Key="AskRow" TargetType="DataGridRow">
+            <Setter Property="Background" Value="#1FFF4444"/>
+            <Setter Property="Foreground" Value="#FFEF5350"/>
+        </Style>
+        <Style x:Key="BidRow" TargetType="DataGridRow">
+            <Setter Property="Background" Value="#1F44FF66"/>
+            <Setter Property="Foreground" Value="#FF66BB6A"/>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel LastChildFill="True">
+        <!-- Layout: header on top, order panel pinned to bottom, ladder fills
+             the middle. The ladder is a single ScrollViewer holding asks ->
+             mid divider -> bids in a stack so the data clusters around the mid
+             without huge empty regions when the book is sparse. -->
+
+        <!-- Header -->
+        <Border DockPanel.Dock="Top" Background="#FF252526" Padding="14,10">
+            <StackPanel>
+                <!-- Primary header: the market's human-readable subtitle/title;
+                     falls back to the ticker until /markets/{ticker} returns. -->
+                <TextBlock Text="{Binding HeaderPrimary}"
+                           FontSize="16" FontWeight="Bold" Foreground="White"
+                           TextWrapping="Wrap"/>
+                <!-- Secondary line: ticker + parent question when both apply.
+                     Hidden until metadata is loaded so the header never shows
+                     a duplicate ticker. -->
+                <TextBlock Text="{Binding HeaderSecondary}"
+                           FontSize="11" Foreground="#FF999999"
+                           TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                           Margin="0,2,0,0"
+                           Visibility="{Binding HasHeaderSecondary, Converter={StaticResource BoolToVis}}"/>
+                <Grid Margin="0,8,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.Column="0" Background="#1F66BB6A" Padding="10,6" Margin="0,0,4,0" CornerRadius="4">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="YES " Foreground="#FFAAAAAA" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding BestBidText}" Foreground="#FF66BB6A" FontWeight="Bold" FontSize="20" Margin="6,0,0,0"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Column="1" Background="#1FEF5350" Padding="10,6" Margin="4,0,0,0" CornerRadius="4">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="NO " Foreground="#FFAAAAAA" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding NoBidText}" Foreground="#FFEF5350" FontWeight="Bold" FontSize="20" Margin="6,0,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+                <Grid Margin="0,6,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal">
+                        <TextBlock Text="Mid: " Foreground="#FF999999"/>
+                        <TextBlock Text="{Binding MidPrice}" Foreground="#FFFFD54F" FontWeight="Bold"/>
+                        <TextBlock Text="    " Foreground="#FF999999"/>
+                        <TextBlock Text="{Binding SpreadText}" Foreground="#FF999999"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- Unit-mode chips (only meaningful when chart is shown). -->
+                        <StackPanel Orientation="Horizontal"
+                                    Visibility="{Binding ShowDepthChart, Converter={StaticResource BoolToVis}}">
+                            <Button Content="Cnt" Click="UnitContracts_Click"
+                                    Style="{StaticResource ChipBtnUnitContracts}"
+                                    ToolTip="Show cumulative depth in contracts"/>
+                            <Button Content="$" Click="UnitNotional_Click" Margin="3,0,0,0"
+                                    Style="{StaticResource ChipBtnUnitNotional}"
+                                    ToolTip="Show cumulative depth in notional dollars"/>
+                            <Button Content="%" Click="UnitPercent_Click" Margin="3,0,8,0"
+                                    Style="{StaticResource ChipBtnUnitPercent}"
+                                    ToolTip="Show cumulative depth as a percent of total book size"/>
+                        </StackPanel>
+                        <!-- Depth chart visibility toggle. Accent when on, muted when off. -->
+                        <Button x:Name="DepthToggle" Click="DepthToggle_Click" Content="📊 Depth"
+                                Style="{StaticResource ChipBtnDepthToggle}"
+                                ToolTip="Toggle cumulative depth chart (Ctrl+D)"/>
+                    </StackPanel>
+                </Grid>
+            </StackPanel>
+        </Border>
+
+        <!-- Cumulative depth chart, off by default. Collapsed (zero size) when off
+             so the ladder reclaims the full vertical region with no gap. -->
+        <Border DockPanel.Dock="Top"
+                Background="#FF141414"
+                BorderBrush="#FF333333"
+                BorderThickness="0,0,0,1"
+                Height="160"
+                Visibility="{Binding ShowDepthChart, Converter={StaticResource BoolToVis}}">
+            <oxy:PlotView Model="{Binding DepthChartModel}"
+                          IsMouseWheelEnabled="False"
+                          Background="Transparent"/>
+        </Border>
+
+        <!-- Order panel pinned to the bottom of the window -->
+        <Border DockPanel.Dock="Bottom" Background="#FF252526" BorderBrush="#FF444444" BorderThickness="0,1,0,0" Padding="14,10">
+            <StackPanel>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="DEMO ORDER" Foreground="#FFFFD54F" FontWeight="Bold" VerticalAlignment="Center"/>
+                    <TextBlock Text="(safety-capped at 5 contracts/order)" Foreground="#FF777777" FontSize="10" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <ComboBox x:Name="OrderSide" Width="60" SelectedIndex="0" Margin="0,0,6,0">
+                        <ComboBoxItem Content="YES"/>
+                        <ComboBoxItem Content="NO"/>
+                    </ComboBox>
+                    <ComboBox x:Name="OrderAction" Width="70" SelectedIndex="0" Margin="0,0,6,0">
+                        <ComboBoxItem Content="Buy"/>
+                        <ComboBoxItem Content="Sell"/>
+                    </ComboBox>
+                    <TextBlock Text="@" Foreground="#FF999999" VerticalAlignment="Center" Margin="2,0"/>
+                    <TextBox x:Name="OrderPrice" Width="48" Text="50" VerticalAlignment="Center" Margin="0,0,2,0"/>
+                    <TextBlock Text="¢ ×" Foreground="#FF999999" VerticalAlignment="Center" Margin="2,0"/>
+                    <TextBox x:Name="OrderCount" Width="40" Text="1" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <Button x:Name="OrderSubmit" Content="Submit" Width="90" Padding="6,2" Background="#FF1565C0" Foreground="White" BorderThickness="0" Click="OrderSubmit_Click"/>
+                    <Button x:Name="OrderCancelLast" Content="Cancel last" Width="120" Padding="6,2" Margin="6,0,0,0" Background="#FFB71C1C" Foreground="White" BorderThickness="0" Click="OrderCancelLast_Click" IsEnabled="False"/>
+                </StackPanel>
+                <TextBlock x:Name="OrderStatus" Text="" Foreground="#FF999999" Margin="0,8,0,0" TextWrapping="Wrap"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Ladder body — single scrollable stack: asks, mid divider, bids.
+             Compact when book is sparse, scrolls when deep. Mirrors kalshi.com. -->
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Background="#FF1A1A1A">
+            <StackPanel>
+        <DataGrid x:Name="AsksGrid"
+                  ItemsSource="{Binding Asks}"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  IsReadOnly="True"
+                  HeadersVisibility="Column"
+                  GridLinesVisibility="None"
+                  Background="#FF1A1A1A"
+                  BorderThickness="0"
+                  RowStyle="{StaticResource AskRow}"
+                  ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                  ScrollViewer.CanContentScroll="False">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Price"     Binding="{Binding PriceText}"     Width="80"/>
+                <DataGridTextColumn Header="Contracts" Binding="{Binding ContractsText}" Width="100"/>
+                <DataGridTextColumn Header="Total"     Binding="{Binding TotalText}"     Width="100"/>
+                <DataGridTemplateColumn Header="Depth" Width="*">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Rectangle Fill="#55EF5350" Height="14"
+                                       Width="{Binding BarWidth}"
+                                       HorizontalAlignment="Left"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- Mid divider -->
+        <Border Background="#FF2D2D30" BorderBrush="#FF444444" BorderThickness="0,1" Padding="14,6">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                <TextBlock Text="Mid " Foreground="#FFAAAAAA" VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding MidPrice}" Foreground="#FFFFD54F" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Bids (bottom). Same compact stack pattern as asks. -->
+        <DataGrid x:Name="BidsGrid"
+                  ItemsSource="{Binding Bids}"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  IsReadOnly="True"
+                  HeadersVisibility="None"
+                  GridLinesVisibility="None"
+                  Background="#FF1A1A1A"
+                  BorderThickness="0"
+                  RowStyle="{StaticResource BidRow}"
+                  ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                  ScrollViewer.CanContentScroll="False">
+            <DataGrid.Columns>
+                <DataGridTextColumn Binding="{Binding PriceText}"     Width="80"/>
+                <DataGridTextColumn Binding="{Binding ContractsText}" Width="100"/>
+                <DataGridTextColumn Binding="{Binding TotalText}"     Width="100"/>
+                <DataGridTemplateColumn Width="*">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Rectangle Fill="#5566BB6A" Height="14"
+                                       Width="{Binding BarWidth}"
+                                       HorizontalAlignment="Left"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>
