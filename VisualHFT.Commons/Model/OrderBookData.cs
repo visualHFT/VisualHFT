@@ -247,13 +247,26 @@ namespace VisualHFT.Model
             {
                 if (disposing)
                 {
-                    Clear();  // This returns all BookItems to the pool
-
-                    _rwLock?.Dispose();
-                    _Bids?.Clear();
-                    _Asks?.Clear();
-                    _Bids = null;
-                    _Asks = null;
+                    // Tear down under the write lock so it is mutually exclusive with readers
+                    // holding the read lock. GetAsksSnapshot/GetBidsSnapshot capture a span over
+                    // the List's backing array; clearing it concurrently nulls those slots and
+                    // crashes the reader (NRE in BookItem.CopyEssentialsFrom). See
+                    // OrderBookDisposeRaceTests.
+                    _rwLock.EnterWriteLock();
+                    try
+                    {
+                        Clear();  // returns all BookItems to the pool and empties the lists
+                        _Bids = null;
+                        _Asks = null;
+                    }
+                    finally
+                    {
+                        _rwLock.ExitWriteLock();
+                    }
+                    // Intentionally do NOT dispose _rwLock: we only ever use Enter/Exit (no wait
+                    // handles are created), so it holds no unmanaged resource, and disposing it
+                    // here would throw ObjectDisposedException for any reader that acquires the
+                    // read lock during teardown. Let the GC reclaim it.
                 }
                 _disposed = true;
             }

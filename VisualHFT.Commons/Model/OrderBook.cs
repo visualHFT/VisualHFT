@@ -154,7 +154,11 @@ namespace VisualHFT.Model
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public int GetBidsSnapshot(Span<BookItem> destination)
         {
-            ThrowIfDisposed();
+            // A disposed book yields an empty snapshot rather than throwing: a reconnect can
+            // dispose the book while an in-flight dispatch is still snapshotting it (see
+            // OrderBookDisposeRaceTests). Returning 0 keeps that transient read benign.
+            if (Volatile.Read(ref _disposed))
+                return 0;
             using (_data.EnterReadLock())
             {
                 int maxCount = MaxDepth > 0 && FilterBidAskByMaxDepth ? MaxDepth : int.MaxValue;
@@ -187,7 +191,9 @@ namespace VisualHFT.Model
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public int GetAsksSnapshot(Span<BookItem> destination)
         {
-            ThrowIfDisposed();
+            // See GetBidsSnapshot: disposed -> empty snapshot, never throw.
+            if (Volatile.Read(ref _disposed))
+                return 0;
             using (_data.EnterReadLock())
             {
                 int maxCount = MaxDepth > 0 && FilterBidAskByMaxDepth ? MaxDepth : int.MaxValue;
@@ -300,8 +306,13 @@ namespace VisualHFT.Model
 
         public void CalculateMetrics()
         {
+            if (Volatile.Read(ref _disposed))
+                return;
             using (_data.EnterReadLock())
             {
+                // Guard against a concurrent dispose nulling the books mid-read.
+                if (_data.Asks == null || _data.Bids == null)
+                    return;
                 lobMetrics.LoadData(_data.Asks, _data.Bids, MaxDepth);
                 _data.ImbalanceValue = lobMetrics.Calculate_OrderImbalance();
             }
@@ -919,20 +930,17 @@ namespace VisualHFT.Model
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         private double Unscale(ulong scaled) => scaled / (double)_volumeScale;
 
-        private void ThrowIfDisposed()
-        {
-            if (_disposed)
-                throw new ObjectDisposedException(nameof(OrderBook));
-        }
         protected virtual void Dispose(bool disposing)
         {
             if (!_disposed)
             {
+                // Publish disposed BEFORE tearing down so concurrent readers observe it and
+                // bail to an empty snapshot instead of racing the teardown.
+                Volatile.Write(ref _disposed, true);
                 if (disposing)
                 {
                     _data?.Dispose();
                 }
-                _disposed = true;
             }
         }
 
