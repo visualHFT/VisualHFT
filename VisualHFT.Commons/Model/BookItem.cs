@@ -86,7 +86,7 @@ namespace VisualHFT.Model
 
         /// <summary>
         /// Optimized copy for snapshot operations - copies only essential per-level fields.
-        /// Skips Symbol, ProviderID, EntryID, LayerName, timestamps, and decimal places
+        /// Skips Symbol, ProviderID, EntryID, LayerName, and timestamps
         /// which are identical across all levels in an order book.
         /// ~2.5x faster than full CopyFrom().
         /// </summary>
@@ -96,6 +96,8 @@ namespace VisualHFT.Model
             // Only copy fields that vary per price level
             _Price = source._Price;
             _Size = source._Size;
+            PriceDecimalPlaces = source.PriceDecimalPlaces;
+            SizeDecimalPlaces = source.SizeDecimalPlaces;
             _IsBid = source._IsBid;
             _ActiveSize = source._ActiveSize;
             _CummulativeSize = source._CummulativeSize;
