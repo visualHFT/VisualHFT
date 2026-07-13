@@ -19,7 +19,9 @@ namespace VisualHFT.Studies.VPIN.Model
         public string? GetConfigurationError()
         {
             var missing = new List<string>();
-            if (Provider == null || string.IsNullOrEmpty(Provider.ProviderName))
+            // Same provider-identity rule as the base gate (StudyConfigPolicy):
+            // match on ProviderID, not the display-only ProviderName.
+            if (StudyConfigPolicy.IsProviderMissing(Provider))
                 missing.Add("data provider");
             if (string.IsNullOrEmpty(Symbol))
                 missing.Add("symbol");

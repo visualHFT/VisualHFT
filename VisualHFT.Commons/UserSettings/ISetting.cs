@@ -20,7 +20,10 @@ namespace VisualHFT.UserSettings
         string? GetConfigurationError()
         {
             var missing = new List<string>();
-            if (Provider == null || string.IsNullOrEmpty(Provider.ProviderName))
+            // Gate on the provider identity the emit path actually matches on (ProviderID),
+            // not the display-only ProviderName — see StudyConfigPolicy. Fixes emit-capable/
+            // running studies being grayed in the study pickers.
+            if (StudyConfigPolicy.IsProviderMissing(Provider))
                 missing.Add("data provider");
             if (string.IsNullOrEmpty(Symbol))
                 missing.Add("symbol");

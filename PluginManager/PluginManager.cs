@@ -86,7 +86,10 @@ namespace VisualHFT.PluginManager
                                 GroupName = multi.TileTitle,
                                 ProviderName = settings?.Provider?.ProviderName ?? string.Empty,
                                 Symbol = settings?.Symbol ?? string.Empty,
-                                IsConfigured = reason is null,
+                                // Liveness gate: a STARTED (running/emitting) study is selectable even
+                                // if its static config-gate is unhappy — the picker should reflect what
+                                // is actually running, not just static settings well-formedness.
+                                IsConfigured = reason is null || plugin.Status == ePluginStatus.STARTED,
                                 UnavailableReason = reason
                             });
                         }
@@ -105,7 +108,8 @@ namespace VisualHFT.PluginManager
                             GroupName = null,
                             ProviderName = settings?.Provider?.ProviderName ?? string.Empty,
                             Symbol = settings?.Symbol ?? string.Empty,
-                            IsConfigured = reason is null,
+                            // Liveness gate (see multi-study branch above).
+                            IsConfigured = reason is null || plugin.Status == ePluginStatus.STARTED,
                             UnavailableReason = reason
                         });
                     }
