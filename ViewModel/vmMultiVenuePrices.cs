@@ -340,7 +340,13 @@ namespace VisualHFT.ViewModel
                 YAxisKey = "yAxe",
                 StrokeThickness = 5
             };
-            MyPlotModel.Series.Add(series);
+            // Series are created by the queue worker. Synchronize with OxyPlot's
+            // renderer and resolve the keyed axes before the series can render.
+            lock (MyPlotModel.SyncRoot)
+            {
+                MyPlotModel.Series.Add(series);
+                ((IPlotModel)MyPlotModel).Update(false);
+            }
 
             var aggregatedCollection = new AggregatedCollection<PlotInfo>(_aggregationLevelSelection, _MAX_ITEMS, x => x.Date, Aggregation);
 
