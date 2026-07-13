@@ -49,8 +49,8 @@ namespace MarketConnectors.Binance
         private int pingFailedAttempts = 0;
         private System.Timers.Timer _timerPing;
 
-        private CallResult<UpdateSubscription> deltaSubscription;
-        private CallResult<UpdateSubscription> tradesSubscription;
+        private WebSocketResult<UpdateSubscription> deltaSubscription;
+        private WebSocketResult<UpdateSubscription> tradesSubscription;
 
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 

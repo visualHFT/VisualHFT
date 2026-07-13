@@ -45,8 +45,8 @@ namespace MarketConnectors.Bitfinex
 
         private int pingFailedAttempts = 0;
         private System.Timers.Timer _timerPing;
-        private CallResult<UpdateSubscription> deltaSubscription;  // Revert to single variable
-        private CallResult<UpdateSubscription> tradesSubscription; // Revert to single variable
+        private WebSocketResult<UpdateSubscription> deltaSubscription;
+        private WebSocketResult<UpdateSubscription> tradesSubscription;
 
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
         private readonly CustomObjectPool<VisualHFT.Model.Trade> tradePool = new CustomObjectPool<VisualHFT.Model.Trade>();//pool of Trade objects
@@ -212,7 +212,7 @@ namespace MarketConnectors.Bitfinex
                 var _normalizedSymbol = GetNormalizedSymbol(symbol);
 
                 log.Info($"{this.Name}: sending WS Trades Subscription {_normalizedSymbol} ");
-                tradesSubscription = await _socketClient.SpotApi.SubscribeToTradeUpdatesAsync(
+                tradesSubscription = await _socketClient.ExchangeApi.SubscribeToTradeUpdatesAsync(
                     symbol,
                     trade =>
                     {
@@ -269,7 +269,7 @@ namespace MarketConnectors.Bitfinex
         {
             if (string.IsNullOrEmpty(this._settings.ApiKey) && !string.IsNullOrEmpty(this._settings.ApiSecret))
             {
-                await _socketClient.SpotApi.SubscribeToUserUpdatesAsync(async neworder =>
+                await _socketClient.ExchangeApi.SubscribeToUserUpdatesAsync(async neworder =>
                 {
                     log.Info(neworder.Data);
                     if (neworder.Data != null)
@@ -338,7 +338,7 @@ namespace MarketConnectors.Bitfinex
             {
                 var normalizedSymbol = GetNormalizedSymbol(symbol);
                 log.Info($"{this.Name}: sending WS Deltas Subscription {normalizedSymbol} ");
-                deltaSubscription = await _socketClient.SpotApi.SubscribeToOrderBookUpdatesAsync(
+                deltaSubscription = await _socketClient.ExchangeApi.SubscribeToOrderBookUpdatesAsync(
                     symbol,
                     Precision.PrecisionLevel0, Frequency.Realtime,
                     _settings.DepthLevels,
@@ -412,7 +412,7 @@ namespace MarketConnectors.Bitfinex
                 log.Info($"{this.Name}: Getting snapshot {normalizedSymbol} level 2");
 
                 // Fetch initial depth snapshot
-                var depthSnapshot = await _restClient.SpotApi.ExchangeData.GetOrderBookAsync(symbol, Precision.PrecisionLevel0, _settings.DepthLevels);
+                var depthSnapshot = await _restClient.ExchangeApi.ExchangeData.GetOrderBookAsync(symbol, Precision.PrecisionLevel0, _settings.DepthLevels);
                 if (depthSnapshot.Success)
                 {
                     _localOrderBooks[normalizedSymbol] = ToOrderBookModel(depthSnapshot.Data, normalizedSymbol);
@@ -568,7 +568,7 @@ namespace MarketConnectors.Bitfinex
 
 
                 DateTime ini = DateTime.Now;
-                var result = await _restClient.SpotApi.ExchangeData.GetPlatformStatusAsync();
+                var result = await _restClient.ExchangeApi.ExchangeData.GetPlatformStatusAsync();
                 if (result != null)
                 {
                     var timeLapseInMicroseconds = DateTime.Now.Subtract(ini).TotalMicroseconds;

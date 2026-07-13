@@ -64,8 +64,8 @@ namespace MarketConnectors.Kraken
 
         private int pingFailedAttempts = 0;
         private System.Timers.Timer _timerPing;
-        private Dictionary<string, CallResult<UpdateSubscription>> deltaSubscriptions = new(); // ✅ FIX: Store per-symbol
-        private Dictionary<string, CallResult<UpdateSubscription>> tradesSubscriptions = new(); // ✅ FIX: Store per-symbol
+        private Dictionary<string, WebSocketResult<UpdateSubscription>> deltaSubscriptions = new(); // ✅ FIX: Store per-symbol
+        private Dictionary<string, WebSocketResult<UpdateSubscription>> tradesSubscriptions = new(); // ✅ FIX: Store per-symbol
 
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 

@@ -56,12 +56,12 @@ namespace MarketConnectors.KuCoin
             new Dictionary<string, VisualHFT.Model.Order>();
         private readonly object _userOrdersLock = new object();
 
-        private readonly ConcurrentBag<CallResult<UpdateSubscription>> _allSubscriptions = new();
+        private readonly ConcurrentBag<WebSocketResult<UpdateSubscription>> _allSubscriptions = new();
 
         private int pingFailedAttempts = 0;
         private System.Timers.Timer _timerPing;
-        private CallResult<UpdateSubscription> deltaSubscription;
-        private CallResult<UpdateSubscription> tradesSubscription;
+        private WebSocketResult<UpdateSubscription> deltaSubscription;
+        private WebSocketResult<UpdateSubscription> tradesSubscription;
 
         private static readonly log4net.ILog log =
             log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
