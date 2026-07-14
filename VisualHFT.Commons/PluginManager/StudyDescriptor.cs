@@ -22,6 +22,13 @@ namespace VisualHFT.PluginManager
         /// <summary>Parent name for grouping multi-study children; null for standalone studies.</summary>
         public string? GroupName { get; init; }
 
+        /// <summary>
+        /// The study's own rich tooltip (<c>IStudy.TileToolTip</c>, b/i/br HTML — render with
+        /// <c>HtmlTooltip.Html</c>). For a multi-study child this is the CHILD's own tooltip,
+        /// never the parent's. Empty when the study declares none.
+        /// </summary>
+        public string TileToolTip { get; init; } = string.Empty;
+
         public string ProviderName { get; init; } = string.Empty;
         public string Symbol { get; init; } = string.Empty;
 

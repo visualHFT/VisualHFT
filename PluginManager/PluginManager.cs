@@ -84,12 +84,19 @@ namespace VisualHFT.PluginManager
                                 Id = $"{parentId}|{child.TileTitle}",
                                 DisplayName = child.TileTitle,
                                 GroupName = multi.TileTitle,
+                                // The CHILD's own tooltip (never the parent's) so pickers can
+                                // surface what this specific metric is.
+                                TileToolTip = child.TileToolTip ?? string.Empty,
                                 ProviderName = settings?.Provider?.ProviderName ?? string.Empty,
                                 Symbol = settings?.Symbol ?? string.Empty,
-                                // Liveness gate: a STARTED (running/emitting) study is selectable even
-                                // if its static config-gate is unhappy — the picker should reflect what
-                                // is actually running, not just static settings well-formedness.
-                                IsConfigured = reason is null || plugin.Status == ePluginStatus.STARTED,
+                                // Config-gate only — deliberately NOT plugin.Status: StartAsync sets
+                                // STARTED unconditionally when lifecycle wiring finishes, configured or
+                                // not (config matching is self-guarded per-event inside the handlers),
+                                // so STARTED would rescue never-configured auto-started system plugins.
+                                // A study reconfigured live IS reflected here without any liveness
+                                // rescue, because GetConfigurationError keys on the same provider
+                                // identity the emit path matches (StudyConfigPolicy).
+                                IsConfigured = reason is null,
                                 UnavailableReason = reason
                             });
                         }
@@ -106,10 +113,11 @@ namespace VisualHFT.PluginManager
                             Id = plugin.GetPluginUniqueID(),
                             DisplayName = study.TileTitle,
                             GroupName = null,
+                            TileToolTip = study.TileToolTip ?? string.Empty,
                             ProviderName = settings?.Provider?.ProviderName ?? string.Empty,
                             Symbol = settings?.Symbol ?? string.Empty,
-                            // Liveness gate (see multi-study branch above).
-                            IsConfigured = reason is null || plugin.Status == ePluginStatus.STARTED,
+                            // Config-gate only — NOT plugin.Status (see multi-study branch above).
+                            IsConfigured = reason is null,
                             UnavailableReason = reason
                         });
                     }
