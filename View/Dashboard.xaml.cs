@@ -54,6 +54,24 @@ namespace VisualHFT
             form.Show();
         }
 
+        private void ButtonKalshiStrikes_Click(object sender, RoutedEventArgs e)
+        {
+            var form = new View.KalshiStrikeLadderWindow();
+            form.Show();
+        }
+
+        private void ButtonKalshiBrowser_Click(object sender, RoutedEventArgs e)
+        {
+            var form = new View.KalshiEventBrowserWindow();
+            form.Show();
+        }
+
+        private void ButtonKalshiWatchList_Click(object sender, RoutedEventArgs e)
+        {
+            var form = new View.KalshiWatchListWindow();
+            form.Show();
+        }
+
         private void ButtonPluginManagement_Click(object sender, RoutedEventArgs e)
         {
             var form = new View.PluginManagerWindow();
