@@ -1,0 +1,29 @@
+<UserControl x:Class="VisualHFT.Studies.FXMacroData.UserControls.PluginSettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d">
+    <Grid Margin="10">
+        <StackPanel>
+            <TextBlock TextWrapping="Wrap" Margin="0,0,0,12">
+                FXMacroData uses its public USD release calendar. No API key is required. The study emits 1 only around confirmed, top-tier releases.
+            </TextBlock>
+
+            <Label Content="Minutes before release" />
+            <TextBox Text="{Binding MinutesBeforeRelease, ValidatesOnDataErrors=True, UpdateSourceTrigger=PropertyChanged}" />
+
+            <Label Content="Minutes after release" Margin="0,10,0,0" />
+            <TextBox Text="{Binding MinutesAfterRelease, ValidatesOnDataErrors=True, UpdateSourceTrigger=PropertyChanged}" />
+
+            <Label Content="Refresh interval (minutes)" Margin="0,10,0,0" />
+            <TextBox Text="{Binding RefreshIntervalMinutes, ValidatesOnDataErrors=True, UpdateSourceTrigger=PropertyChanged}" />
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+                <Label Content="{Binding ValidationMessage}" Foreground="Red" HorizontalAlignment="Left" Margin="0,0,20,0" />
+                <Button Content="OK" Command="{Binding OkCommand}" Margin="0,0,5,0" Width="80" />
+                <Button Content="Cancel" Command="{Binding CancelCommand}" Width="80" />
+            </StackPanel>
+        </StackPanel>
+    </Grid>
+</UserControl>
