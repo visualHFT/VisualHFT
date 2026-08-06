@@ -1,0 +1,131 @@
+<Window x:Class="VisualHFT.View.KalshiWatchListWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="Kalshi — Watch List"
+        Height="600" Width="900"
+        Background="#FF1A1A1A"
+        TextElement.Foreground="White"
+        FontFamily="Consolas"
+        FontSize="13">
+    <Window.Resources>
+        <Style TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#FF252526"/>
+            <Setter Property="Foreground" Value="#FFCCCCCC"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Padding" Value="6,4"/>
+        </Style>
+        <Style TargetType="DataGridCell">
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="6,3"/>
+            <Setter Property="Background" Value="Transparent"/>
+        </Style>
+        <Style TargetType="DataGridRow">
+            <Setter Property="Background" Value="#FF1F1F1F"/>
+            <Setter Property="Foreground" Value="#FFCCCCCC"/>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel LastChildFill="True">
+        <Border DockPanel.Dock="Top" Background="#FF252526" Padding="14,10">
+            <StackPanel>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="📋 Kalshi Watch List" FontSize="16" FontWeight="Bold" Foreground="White"/>
+                    <TextBlock Text="  Live tickers being polled by the browser. Strike ladder shows the same set." Foreground="#FF999999" VerticalAlignment="Center" Margin="20,0,0,0"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <TextBlock Text="Add ticker:" Foreground="#FFAAAAAA" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBox x:Name="AddInput" Width="240" VerticalAlignment="Center" Margin="0,0,6,0"
+                             ToolTip="e.g. KXWTI-26APR30-T107.99 — single ticker; double-click events in 📁 Browser to add a whole event"/>
+                    <Button x:Name="AddBtn" Content="Add" Width="60" Padding="6,2" Background="#FF1565C0" Foreground="White" BorderThickness="0" Click="AddBtn_Click"/>
+                    <TextBlock Text="    🔍 Search:" Foreground="#FFAAAAAA" VerticalAlignment="Center" Margin="20,0,6,0"/>
+                    <TextBox x:Name="SearchInput" Width="240" VerticalAlignment="Center"
+                             Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="Filter by ticker or event ticker — type any substring"/>
+                    <TextBlock Text="    Total: " Foreground="#FF999999" VerticalAlignment="Center" Margin="20,0,0,0"/>
+                    <TextBlock Text="{Binding Rows.Count}" Foreground="#FFFFD54F" FontWeight="Bold" VerticalAlignment="Center"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <DataGrid x:Name="WatchGrid"
+                  ItemsSource="{Binding FilteredRows}"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  CanUserSortColumns="True"
+                  IsReadOnly="True"
+                  HeadersVisibility="Column"
+                  GridLinesVisibility="Horizontal"
+                  HorizontalGridLinesBrush="#FF2D2D30"
+                  Background="#FF1A1A1A"
+                  BorderThickness="0"
+                  MouseDoubleClick="WatchGrid_MouseDoubleClick"
+                  Cursor="Hand"
+                  ToolTip="Double-click → load in main chart. Right-click for more options.">
+            <DataGrid.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="📊 Open kalshi.com-style ladder window" Click="OpenLadder_Click"/>
+                    <MenuItem Header="📈 Load in main chart"                  Click="LoadInMainChart_Click"/>
+                    <Separator/>
+                    <MenuItem Header="❌ Remove from Watch List"               Click="RemoveCtx_Click"/>
+                </ContextMenu>
+            </DataGrid.ContextMenu>
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Ticker"      Binding="{Binding Ticker}"      Width="240">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="#FF8AB4F8"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="Event"       Binding="{Binding EventTicker}" Width="200"/>
+                <DataGridTextColumn Header="YES Bid"     Binding="{Binding YesBidText}"  Width="80">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="HorizontalAlignment" Value="Right"/>
+                            <Setter Property="Foreground" Value="#FF66BB6A"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="YES Ask"     Binding="{Binding YesAskText}"  Width="80">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="HorizontalAlignment" Value="Right"/>
+                            <Setter Property="Foreground" Value="#FFEF5350"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="Mid"         Binding="{Binding MidText}"     Width="80">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="HorizontalAlignment" Value="Right"/>
+                            <Setter Property="Foreground" Value="#FFFFD54F"/>
+                            <Setter Property="FontWeight" Value="Bold"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="Spread"      Binding="{Binding SpreadText}"  Width="70">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="HorizontalAlignment" Value="Right"/>
+                            <Setter Property="Foreground" Value="#FF999999"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="Updated"     Binding="{Binding LastUpdate, StringFormat='HH:mm:ss'}" Width="90"/>
+                <DataGridTemplateColumn Header="" Width="80">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Button Content="Remove" Padding="4,1" Background="#FFB71C1C" Foreground="White" BorderThickness="0"
+                                    Click="RemoveBtn_Click"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+    </DockPanel>
+</Window>

@@ -48,7 +48,7 @@
                 </Style>
             </DataGrid.RowStyle>
             <DataGrid.Columns>
-                <DataGridTextColumn Width="*" Header="Bids" Binding="{Binding FormattedSize}" CanUserSort="False" CanUserReorder="False" IsReadOnly="True" ElementStyle="{StaticResource RightAligned}" HeaderStyle="{StaticResource RightAlignedHeader}">
+                <DataGridTextColumn Width="*" Header="YES Bid" Binding="{Binding FormattedSize}" CanUserSort="False" CanUserReorder="False" IsReadOnly="True" ElementStyle="{StaticResource RightAligned}" HeaderStyle="{StaticResource RightAlignedHeader}">
                     <DataGridTextColumn.CellStyle>
                         <Style TargetType="DataGridCell">
                             <Setter Property="Foreground" Value="LightGreen"/>
@@ -110,7 +110,7 @@
                         </Style>
                     </DataGridTextColumn.CellStyle>
                 </DataGridTextColumn>
-                <DataGridTextColumn Width="*" Header="Asks" Binding="{Binding FormattedSize}" CanUserSort="False" CanUserReorder="False" IsReadOnly="True">
+                <DataGridTextColumn Width="*" Header="YES Ask" Binding="{Binding FormattedSize}" CanUserSort="False" CanUserReorder="False" IsReadOnly="True">
                     <DataGridTextColumn.CellStyle>
                         <Style TargetType="DataGridCell">
                             <Setter Property="Foreground" Value="LightPink"/>
