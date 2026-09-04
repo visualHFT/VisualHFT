@@ -7,6 +7,7 @@ using MarketConnectors.BitStamp.ViewModel;
 using Newtonsoft.Json;
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
+using VisualHFT.Commons.Helpers;
 using VisualHFT.Commons.Model;
 using VisualHFT.Commons.PluginManager;
 using VisualHFT.DataRetriever.DataParsers;
@@ -283,14 +284,14 @@ namespace MarketConnectors.Gemini
             }
         }
 
-        private VisualHFT.Model.OrderBook ToOrderBookModel(InitialResponse data, string symbol)
+        internal VisualHFT.Model.OrderBook ToOrderBookModel(InitialResponse data, string symbol)
         {
-            var identifiedPriceDecimalPlaces = RecognizeDecimalPlacesAutomatically(data.asks.Select(x => double.Parse(x[0])));
+            var identifiedPriceDecimalPlaces = RecognizeDecimalPlacesAutomatically(data.asks.Select(x => WireNumber.ParseDouble(x[0])));
 
             var lob = new VisualHFT.Model.OrderBook(symbol, identifiedPriceDecimalPlaces, _settings.DepthLevels);
             lob.ProviderID = _settings.Provider.ProviderID;
             lob.ProviderName = _settings.Provider.ProviderName;
-            lob.SizeDecimalPlaces = RecognizeDecimalPlacesAutomatically(data.asks.Select(x => double.Parse(x[1])));
+            lob.SizeDecimalPlaces = RecognizeDecimalPlacesAutomatically(data.asks.Select(x => WireNumber.ParseDouble(x[1])));
 
             return lob;
         }
@@ -330,8 +331,8 @@ namespace MarketConnectors.Gemini
 
                     foreach (var item in type.data.bids)
                     {
-                        var _price = double.Parse(item[0]);
-                        var _size = double.Parse(item[1]);
+                        var _price = WireNumber.ParseDouble(item[0]);
+                        var _size = WireNumber.ParseDouble(item[1]);
 
                         if (_size != 0)
                         {
@@ -362,8 +363,8 @@ namespace MarketConnectors.Gemini
 
                     foreach (var item in type.data.asks)
                     {
-                        var _price = double.Parse(item[0]);
-                        var _size = double.Parse(item[1]);
+                        var _price = WireNumber.ParseDouble(item[0]);
+                        var _size = WireNumber.ParseDouble(item[1]);
 
                         if (_size != 0)
                         {

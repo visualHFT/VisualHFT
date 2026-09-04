@@ -97,99 +97,120 @@ namespace MarketConnectors.KuCoin
 
         public override async Task StartAsync()
         {
-            // ✅ FIX: Use semaphore instead of status check
+            // The start/stop lock is taken by InternalStartAsync, NOT here. The catch below hands a
+            // failed start to the shared reconnection engine, whose first recovery step is StopAsync() --
+            // which waits on that same non-reentrant lock. Holding it across HandleConnectionLost pins the
+            // connector at STARTING for the life of the process. Same shape as every sibling connector.
+            //
+            // There is deliberately no "already started" pre-check here. Outside the lock such a check is
+            // check-then-act -- two concurrent callers both read a pre-STARTING status and both run a full
+            // connect -- and making it atomic would be worse: the failure path re-enters StartAsync through
+            // HandleConnectionLost while this call is still on the stack, so a start latch would silently
+            // cancel the connector's own retry. Kraken, Coinbase, Bitfinex, Binance and BitStamp all have no
+            // such guard; concurrent starts serialize on the lock inside InternalStartAsync, where the
+            // second one's ClearAsync tears the first one's clients down in the correct order.
+            await base.StartAsync(); //call the base first
+
+            try
+            {
+                await InternalStartAsync();
+                // Status is set at the end of InternalStartAsync, under the lock: stamping STARTED out here
+                // would let a StopAsync that ran in between be overwritten, leaving a torn-down connector
+                // reporting itself connected.
+            }
+            catch (Exception ex)
+            {
+                var _error = ex.Message;
+                LogException(ex, _error);
+                await HandleConnectionLost(_error, ex);
+            }
+        }
+
+        /// <summary>Seam so a test can substitute the venue clients and observe their lifetime.</summary>
+        protected virtual IKucoinSocketClient CreateSocketClient()
+        {
+            return new KucoinSocketClient(options =>
+            {
+                if (!string.IsNullOrEmpty(_settings.ApiKey) && !string.IsNullOrEmpty(_settings.ApiSecret) &&
+                    !string.IsNullOrEmpty(_settings.APIPassPhrase))
+                {
+                    options.ApiCredentials = new KucoinCredentials(_settings.ApiKey,
+                        _settings.ApiSecret, _settings.APIPassPhrase);
+                }
+
+                options.Environment = KucoinEnvironment.Live;
+            });
+        }
+
+        /// <summary>Seam so a test can substitute the venue clients and observe their lifetime.</summary>
+        protected virtual IKucoinRestClient CreateRestClient()
+        {
+            return new KucoinRestClient(options =>
+            {
+                if (!string.IsNullOrEmpty(_settings.ApiKey) && !string.IsNullOrEmpty(_settings.ApiSecret) &&
+                    !string.IsNullOrEmpty(_settings.APIPassPhrase))
+                {
+                    options.ApiCredentials = new KucoinCredentials(_settings.ApiKey,
+                        _settings.ApiSecret, _settings.APIPassPhrase);
+                }
+
+                options.Environment = KucoinEnvironment.Live;
+            });
+        }
+
+        internal void ReplaceClients()
+        {
+            _socketClient?.Dispose();
+            _restClient?.Dispose();
+
+            _socketClient = CreateSocketClient();
+            _restClient = CreateRestClient();
+        }
+
+        private async Task InternalStartAsync()
+        {
+            // ✅ FIX: Add synchronization
             await _startStopLock.WaitAsync();
             try
             {
-                if (Status == ePluginStatus.STARTED || Status == ePluginStatus.STARTING)
+                // The outgoing clients are torn down by ClearAsync while still alive, THEN disposed and
+                // replaced -- running the teardown after the replacement would unsubscribe the brand-new
+                // client and leave the previous one's subscriptions attached to the object that owns them.
+                await ClearAsync();
+                ReplaceClients();
+                lock (_buffersLock) // ✅ Protect initialization
                 {
-                    log.Warn("Already started or starting, ignoring duplicate Start request");
-                    return;
-                }
-
-                await base.StartAsync(); //call the base first
-
-                // ✅ Dispose old clients first
-                _socketClient?.Dispose();
-                _restClient?.Dispose();
-
-                _socketClient = new KucoinSocketClient(options =>
-                {
-                    if (!string.IsNullOrEmpty(_settings.ApiKey) && !string.IsNullOrEmpty(_settings.ApiSecret) &&
-                        !string.IsNullOrEmpty(_settings.APIPassPhrase))
+                    // Initialize event buffer for each symbol
+                    foreach (var symbol in GetAllNormalizedSymbols())
                     {
-                        options.ApiCredentials = new KucoinCredentials(_settings.ApiKey,
-                            _settings.ApiSecret, _settings.APIPassPhrase);
+                        _eventBuffers.Add(symbol,
+                            new HelperCustomQueue<Tuple<DateTime?, string, KucoinStreamOrderBook>>(
+                                $"<Tuple<DateTime, string, KucoinStreamOrderBookChanged>>_{this.Name.Replace(" Plugin", "")}",
+                                eventBuffers_onReadAction, eventBuffers_onErrorAction));
+                        _tradesBuffers.Add(symbol,
+                            new HelperCustomQueue<Tuple<string, KucoinTrade>>(
+                                $"<Tuple<DateTime, string, KucoinTrade>>_{this.Name.Replace(" Plugin", "")}",
+                                tradesBuffers_onReadAction, tradesBuffers_onErrorAction));
+
+                        _eventBuffers[symbol]
+                            .PauseConsumer(); //this will allow collecting deltas (without delivering it), until we have the snapshot
                     }
-
-                    options.Environment = KucoinEnvironment.Live;
-                });
-
-
-                _restClient = new KucoinRestClient(options =>
-                {
-                    if (!string.IsNullOrEmpty(_settings.ApiKey) && !string.IsNullOrEmpty(_settings.ApiSecret) &&
-                        !string.IsNullOrEmpty(_settings.APIPassPhrase))
-                    {
-                        options.ApiCredentials = new KucoinCredentials(_settings.ApiKey,
-                            _settings.ApiSecret, _settings.APIPassPhrase);
-                    }
-
-                    options.Environment = KucoinEnvironment.Live;
-                });
-
-
-                try
-                {
-                    await InternalStartAsync();
-                    if (Status == ePluginStatus.STOPPED_FAILED) //check again here for failure
-                        return;
-                    log.Info($"Plugin has successfully started.");
-                    RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
-                    Status = ePluginStatus.STARTED;
-
-
                 }
-                catch (Exception ex)
-                {
-                    var _error = ex.Message;
-                    LogException(ex, _error);
-                    await HandleConnectionLost(_error, ex);
-                }
+                await InitializeDeltasAsync(); //must start collecting deltas before snapshot
+                await InitializeSnapshotsAsync();
+                await InitializeOpenOrders();
+                await InitializeTradesAsync();
+                await InitializePingTimerAsync();
+                await InitializeUserPrivateOrders();
+
+                log.Info($"Plugin has successfully started.");
+                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
+                Status = ePluginStatus.STARTED;
             }
             finally
             {
                 _startStopLock.Release();
             }
-        }
-
-        private async Task InternalStartAsync()
-        {
-            await ClearAsync();
-            lock (_buffersLock) // ✅ Protect initialization
-            {
-                // Initialize event buffer for each symbol
-                foreach (var symbol in GetAllNormalizedSymbols())
-                {
-                    _eventBuffers.Add(symbol,
-                        new HelperCustomQueue<Tuple<DateTime?, string, KucoinStreamOrderBook>>(
-                            $"<Tuple<DateTime, string, KucoinStreamOrderBookChanged>>_{this.Name.Replace(" Plugin", "")}",
-                            eventBuffers_onReadAction, eventBuffers_onErrorAction));
-                    _tradesBuffers.Add(symbol,
-                        new HelperCustomQueue<Tuple<string, KucoinTrade>>(
-                            $"<Tuple<DateTime, string, KucoinTrade>>_{this.Name.Replace(" Plugin", "")}",
-                            tradesBuffers_onReadAction, tradesBuffers_onErrorAction));
-
-                    _eventBuffers[symbol]
-                        .PauseConsumer(); //this will allow collecting deltas (without delivering it), until we have the snapshot
-                }
-            }
-            await InitializeDeltasAsync(); //must start collecting deltas before snapshot
-            await InitializeSnapshotsAsync();
-            await InitializeOpenOrders();
-            await InitializeTradesAsync();
-            await InitializePingTimerAsync();
-            await InitializeUserPrivateOrders();
         }
 
         public override async Task StopAsync()

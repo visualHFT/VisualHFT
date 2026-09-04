@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Binance.Net.Objects.Models.Spot.Socket;
+using VisualHFT.Commons.Helpers;
 
 namespace MarketConnectors.Binance
 {
@@ -54,7 +55,7 @@ namespace MarketConnectors.Binance
             if (reader.TokenType == JsonTokenType.String)
             {
                 string stringValue = reader.GetString();
-                if (int.TryParse(stringValue, out int value))
+                if (WireNumber.TryParseInt(stringValue, out int value))
                 {
                     return value;
                 }
@@ -79,7 +80,7 @@ namespace MarketConnectors.Binance
             if (reader.TokenType == JsonTokenType.String)
             {
                 string stringValue = reader.GetString();
-                if (decimal.TryParse(stringValue, out decimal value))
+                if (WireNumber.TryParseDecimal(stringValue, out decimal value))
                 {
                     return value;
                 }
