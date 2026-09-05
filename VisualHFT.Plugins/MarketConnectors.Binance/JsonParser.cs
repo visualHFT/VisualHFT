@@ -87,7 +87,12 @@ namespace MarketConnectors.Binance
             }
             else if (reader.TokenType == JsonTokenType.Number)
             {
-                return reader.GetInt32();
+                // GetDecimal, not GetInt32: a bare number token carrying a fraction or a value wider
+                // than Int32 makes GetInt32 throw, which System.Text.Json rethrows as a JsonException
+                // -- caught by Parse above, which then returns null and drops the whole update with
+                // nothing but a Console line to show for it. The KuCoin converter already reads this
+                // token with GetDecimal.
+                return reader.GetDecimal();
             }
 
             return 0;

@@ -78,11 +78,6 @@ namespace MarketConnectors.Gemini
         }
 
         /// <summary>
-        /// Reports a lost connection and asks the shared engine to recover -- at most once while a
-        /// recovery is still running. The claim is released when that recovery COMPLETES, never on the
-        /// line after starting it.
-        /// </summary>
-        /// <summary>
         /// Runs the shared engine's recovery. A seam so a test can complete the recovery deterministically
         /// and observe that the in-flight claim is released afterwards -- the release is what lets the
         /// connector report a LATER outage, so it needs a test that actually reaches it.
@@ -92,6 +87,11 @@ namespace MarketConnectors.Gemini
             return HandleConnectionLost(reason, exception);
         }
 
+        /// <summary>
+        /// Reports a lost connection and asks the shared engine to recover -- at most once while a
+        /// recovery is still running. The claim is released when that recovery COMPLETES, never on the
+        /// line after starting it.
+        /// </summary>
         private void RequestReconnect(string reason, Exception? exception, Action? diagnostic = null)
         {
             if (!TryClaimReconnect())
