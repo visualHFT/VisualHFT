@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Binance.Net.Objects.Models.Spot.Socket;
+using VisualHFT.Commons.Helpers;
 
 namespace MarketConnectors.Binance
 {
@@ -54,7 +55,7 @@ namespace MarketConnectors.Binance
             if (reader.TokenType == JsonTokenType.String)
             {
                 string stringValue = reader.GetString();
-                if (int.TryParse(stringValue, out int value))
+                if (WireNumber.TryParseInt(stringValue, out int value))
                 {
                     return value;
                 }
@@ -79,14 +80,19 @@ namespace MarketConnectors.Binance
             if (reader.TokenType == JsonTokenType.String)
             {
                 string stringValue = reader.GetString();
-                if (decimal.TryParse(stringValue, out decimal value))
+                if (WireNumber.TryParseDecimal(stringValue, out decimal value))
                 {
                     return value;
                 }
             }
             else if (reader.TokenType == JsonTokenType.Number)
             {
-                return reader.GetInt32();
+                // GetDecimal, not GetInt32: a bare number token carrying a fraction or a value wider
+                // than Int32 makes GetInt32 throw, which System.Text.Json rethrows as a JsonException
+                // -- caught by Parse above, which then returns null and drops the whole update with
+                // nothing but a Console line to show for it. The KuCoin converter already reads this
+                // token with GetDecimal.
+                return reader.GetDecimal();
             }
 
             return 0;

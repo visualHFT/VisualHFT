@@ -5,7 +5,12 @@ using VisualHFT.PluginManager;
 using VisualHFT.Commons.Interfaces;
 using System.Diagnostics;
 
-[assembly: CollectionBehavior(DisableTestParallelization = true)]
+// xunit.v3 4.0.0 deprecates CollectionBehavior.DisableTestParallelization as an ERROR (CS0619),
+// and its own docs say the property goes away entirely in the next major version.
+// ParallelMode.None is its documented replacement -- "Disables all parallelism within the
+// test assembly" -- the same guarantee these plugin tests rely on, since they drive one
+// shared PluginManager and a live socket per venue.
+[assembly: Xunit.v3.Parallelization(Mode = Xunit.Sdk.ParallelMode.None)]
 
 namespace VisualHFT.DataRetriever.TestingFramework.TestCases
 {

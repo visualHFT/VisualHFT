@@ -10,6 +10,8 @@ using System.IO;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text;
+using System.Globalization;
+using VisualHFT.Commons.Extensions;
 using VisualHFT.Commons.Helpers;
 using VisualHFT.Commons.Interfaces;
 using VisualHFT.Commons.Model;
@@ -57,10 +59,71 @@ namespace MarketConnectors.Gemini
         public override Action? CloseSettingWindow { get; set; }
 
         private IDataParser _parser;
-        WebsocketClient? _socketClient;
-        WebsocketClient? _userOrderEvents;
+        IWebsocketClient? _socketClient;
+        IWebsocketClient? _userOrderEvents;
         GeminiHttpClient geminiHttpClient;
-        private bool isReconnecting = false;
+        // 0 = idle, 1 = a recovery has been requested and has NOT finished yet.
+        // This replaces a plain bool that was set true, handed to a fire-and-forget
+        // HandleConnectionLost, and set back to false on the very next line -- so it was false again
+        // microseconds later while the recovery it guarded had barely begun. The websocket library
+        // drives its own reconnection, so a venue refusing the connection publishes a disconnect event
+        // every few hundred milliseconds; without a latch that actually holds, every one of them is
+        // logged and escalated. Measured in production: 3,772 error reports from one failing feed.
+        private int _reconnectInFlight;
+
+        /// <summary>True only for the first caller while a recovery is in flight.</summary>
+        private bool TryClaimReconnect()
+        {
+            return Interlocked.CompareExchange(ref _reconnectInFlight, 1, 0) == 0;
+        }
+
+        /// <summary>
+        /// Runs the shared engine's recovery. A seam so a test can complete the recovery deterministically
+        /// and observe that the in-flight claim is released afterwards -- the release is what lets the
+        /// connector report a LATER outage, so it needs a test that actually reaches it.
+        /// </summary>
+        protected virtual Task RunReconnectAsync(string reason, Exception? exception)
+        {
+            return HandleConnectionLost(reason, exception);
+        }
+
+        /// <summary>
+        /// Reports a lost connection and asks the shared engine to recover -- at most once while a
+        /// recovery is still running. The claim is released when that recovery COMPLETES, never on the
+        /// line after starting it.
+        /// </summary>
+        private void RequestReconnect(string reason, Exception? exception, Action? diagnostic = null)
+        {
+            if (!TryClaimReconnect())
+                return;
+
+            // Everything after the claim is inside try/finally: a throw before the recovery task is
+            // handed off would otherwise leave the latch held for the life of the process, and the
+            // connector would never ask to reconnect again.
+            bool handedOff = false;
+            try
+            {
+                diagnostic?.Invoke();
+                LogException(exception, "Will reconnect. " + reason);
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await RunReconnectAsync(reason, exception);
+                    }
+                    finally
+                    {
+                        Interlocked.Exchange(ref _reconnectInFlight, 0);
+                    }
+                });
+                handedOff = true;
+            }
+            finally
+            {
+                if (!handedOff)
+                    Interlocked.Exchange(ref _reconnectInFlight, 0);
+            }
+        }
 
         public GeminiPlugin()
         {
@@ -185,7 +248,19 @@ namespace MarketConnectors.Gemini
         }
 
 
-        private async Task InitializeDeltasAsync()
+        /// <summary>Seam so a test can substitute the venue socket and observe its callbacks.</summary>
+        protected virtual IWebsocketClient CreateSocketClient(Uri url)
+        {
+            return new WebsocketClient(url);
+        }
+
+        /// <summary>Seam so a test can substitute the private-order socket and observe its callbacks.</summary>
+        protected virtual IWebsocketClient CreateUserOrderClient(Uri url, Func<ClientWebSocket> factory)
+        {
+            return new WebsocketClient(url, factory);
+        }
+
+        internal async Task InitializeDeltasAsync()
         {
             try
             {
@@ -196,17 +271,12 @@ namespace MarketConnectors.Gemini
                 });
 
                 var url = new Uri(_settings.WebSocketHostName);
-                _socketClient = new WebsocketClient(url);
+                _socketClient = CreateSocketClient(url);
 
                 _socketClient.ReconnectTimeout = TimeSpan.FromSeconds(10);
                 _socketReconnectionSubscription = _socketClient.ReconnectionHappened.Subscribe(info =>
                 {
-                    if (info.Type == ReconnectionType.Error)
-                    {
-                        RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
-                        Status = ePluginStatus.STOPPED_FAILED;
-                    }
-                    else if (info.Type == ReconnectionType.Initial)
+                    if (info.Type == ReconnectionType.Initial)
                     {
                         foreach (var symbol in GetAllNonNormalizedSymbols())
                         {
@@ -214,21 +284,31 @@ namespace MarketConnectors.Gemini
                             // TryAdd is atomic - safe if called concurrently
                             _localOrderBooks.TryAdd(normalizedSymbol, null);
                         }
+                        return;
                     }
+
+                    // ReconnectionHappened fires AFTER a connection has been established, so every type
+                    // other than Initial describes a socket that is UP again -- the type names the CAUSE,
+                    // not the outcome. The library's own documentation defines Error as "used after
+                    // unsuccessful previous reconnection". Stamping STOPPED_FAILED here read a live socket
+                    // as a dead one, and since the reconnection engine refuses to recover a STOPPED_FAILED
+                    // plugin, nothing short of a manual restart could undo it.
+                    //
+                    // The new socket carries none of this connector's subscriptions -- those lived on the
+                    // old one -- so it has to be re-subscribed here or the feed comes back permanently silent.
+                    log.Info($"{this.Name} websocket reconnected ({info.Type}); re-sending the market-data subscription.");
+                    SendMarketDataSubscription();
+                    RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
                 });
                 _socketDisconnectionSubscription = _socketClient.DisconnectionHappened.Subscribe(disconnected =>
                 {
-                    log.Warn($"WebSocket disconnected. Type: {disconnected.Type}, " +
-                                 $"CloseStatus: {disconnected.CloseStatus}, " +
-                                 $"Description: '{disconnected.CloseStatusDescription ?? "(none)"}', " +
-                                 $"Exception: {disconnected.Exception?.Message ?? "(none)"}");
-
-
-                    Status = ePluginStatus.STOPPED;
-                    if (isReconnecting)
-                        return;
+                    // Deliberately NOT stamping Status = STOPPED here: the reconnection engine reads
+                    // STOPPED as "stopped on purpose -- do not retry", so stamping it from a socket
+                    // callback parks the connector on a drop it should recover from. The engine owns
+                    // the status for the whole recovery.
                     if (disconnected.CloseStatus == WebSocketCloseStatus.NormalClosure)
                     {
+                        log.Warn($"{this.Name} websocket closed normally. Description: '{disconnected.CloseStatusDescription ?? "(none)"}'");
                         RaiseOnDataReceived(new List<VisualHFT.Model.OrderBook>());
                         RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.DISCONNECTED));
 
@@ -239,14 +319,14 @@ namespace MarketConnectors.Gemini
                             ? disconnected.CloseStatusDescription
                             : $"Server disconnected (Type: {disconnected.Type})";
 
-                        var _error = $"Will reconnect. {reason}";
-                        LogException(disconnected?.Exception, _error);
-                        if (!isReconnecting)
-                        {
-                            isReconnecting = true;
-                            HandleConnectionLost(disconnected.CloseStatusDescription, disconnected.Exception);
-                            isReconnecting = false;
-                        }
+                        // The diagnostic line goes INSIDE the claim, not out here: the library republishes
+                        // this event every few hundred milliseconds while a venue refuses the connection,
+                        // and an unconditional log turns one outage into thousands of lines.
+                        RequestReconnect(reason, disconnected.Exception, () => log.Warn(
+                            $"{this.Name} websocket disconnected. Type: {disconnected.Type}, "
+                            + $"CloseStatus: {disconnected.CloseStatus}, "
+                            + $"Description: '{disconnected.CloseStatusDescription ?? "(none)"}', "
+                            + $"Exception: {disconnected.Exception?.Message ?? "(none)"}"));
                     }
                 });
                 _socketMessageSubscription = _socketClient.MessageReceived.Subscribe(async msg =>
@@ -261,14 +341,7 @@ namespace MarketConnectors.Gemini
                     catch (Exception ex)
                     {
 
-                        var _error = $"Will reconnect. Unhandled error while receiving delta market data.";
-                        LogException(ex, _error);
-                        if (!isReconnecting)
-                        {
-                            isReconnecting = true;
-                            await HandleConnectionLost(_error, ex);
-                            isReconnecting = false;
-                        }
+                        RequestReconnect("Unhandled error while receiving delta market data.", ex);
                     }
                 });
 
@@ -278,33 +351,34 @@ namespace MarketConnectors.Gemini
                     // ✅ Status is now set in InternalStartAsync - removed duplicate here
                     log.Info($"WebSocket connection established.");
                     RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
-                    string jsonToSubscribe = JsonConvert.SerializeObject(geminiSubscription);
-                    _socketClient.Send(jsonToSubscribe);
+                    SendMarketDataSubscription();
                 }
                 catch (Exception ex)
                 {
-                    var _error = ex.Message;
-                    LogException(ex, _error);
-                    if (!isReconnecting)
-                    {
-                        isReconnecting = true;
-                        await HandleConnectionLost(_error, ex);
-                        isReconnecting = false;
-                    }
+                    RequestReconnect(ex.Message, ex);
                 }
             }
             catch (Exception ex)
             {
-                var _error = ex.Message;
-                LogException(ex, _error);
-                if (!isReconnecting)
-                {
-                    isReconnecting = true;
-                    await HandleConnectionLost(_error, ex);
-                    isReconnecting = false;
-                }
+                RequestReconnect(ex.Message, ex);
             }
         }
+        /// <summary>
+        /// Sends this connector's market-data subscription on the current socket. Called after the first
+        /// connect AND after every library-driven reconnect: a reconnected socket is a NEW connection that
+        /// carries none of the previous subscriptions, so skipping it leaves a connector that reports
+        /// itself connected and never receives another update.
+        /// </summary>
+        private void SendMarketDataSubscription()
+        {
+            var socket = _socketClient;
+            if (socket is null)
+                return;
+
+            string jsonToSubscribe = JsonConvert.SerializeObject(geminiSubscription);
+            socket.Send(jsonToSubscribe);
+        }
+
         private string CreateSignature(string b64)
         {
             using (var hmac = new HMACSHA384(Encoding.UTF8.GetBytes(_settings.ApiSecret)))
@@ -346,15 +420,16 @@ namespace MarketConnectors.Gemini
                         return client;
                     });
 
-                    _userOrderEvents = new WebsocketClient(new Uri(_settings.WebSocketHostName_UserOrder), factory);
+                    _userOrderEvents = CreateUserOrderClient(new Uri(_settings.WebSocketHostName_UserOrder), factory);
                     _userOrderEvents.ReconnectTimeout = TimeSpan.FromSeconds(10);
                     _userReconnectionSubscription = _userOrderEvents.ReconnectionHappened.Subscribe(info =>
                     {
 
-                        if (info.Type == ReconnectionType.Error)
+                        if (info.Type != ReconnectionType.Initial)
                         {
-                            RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
-                            Status = ePluginStatus.STOPPED_FAILED;
+                            // See the market-data handler: this fires AFTER a connection is established,
+                            // so it is not a failure and must not stamp STOPPED_FAILED.
+                            log.Info($"{this.Name} private-order websocket reconnected ({info.Type}).");
                         }
                         else if (info.Type == ReconnectionType.Initial)
                         {
@@ -364,9 +439,7 @@ namespace MarketConnectors.Gemini
                     });
                     _userDisconnectionSubscription = _userOrderEvents.DisconnectionHappened.Subscribe(disconnected =>
                     {
-                        Status = ePluginStatus.STOPPED;
-                        if (isReconnecting)
-                            return;
+                        // See the market-data handler: the engine owns Status during a recovery.
                         if (disconnected.CloseStatus == WebSocketCloseStatus.NormalClosure)
                         {
                             RaiseOnDataReceived(new List<VisualHFT.Model.OrderBook>());
@@ -375,14 +448,11 @@ namespace MarketConnectors.Gemini
                         }
                         else
                         {
-                            var _error = $"Will reconnect. Unhandled error while receiving delta market data.";
-                            LogException(disconnected?.Exception, _error);
-                            if (!isReconnecting)
-                            {
-                                isReconnecting = true;
-                                HandleConnectionLost(disconnected.CloseStatusDescription, disconnected.Exception);
-                                isReconnecting = false;
-                            }
+                            var reason = !string.IsNullOrEmpty(disconnected.CloseStatusDescription)
+                                ? disconnected.CloseStatusDescription
+                                : $"Server disconnected (Type: {disconnected.Type})";
+
+                            RequestReconnect(reason, disconnected.Exception);
                         }
                     });
                     _userMessageSubscription = _userOrderEvents.MessageReceived.Subscribe(async msg =>
@@ -708,8 +778,8 @@ namespace MarketConnectors.Gemini
             foreach (var item in lob_update.Changes)
             {
                 bool isBid = item[0].Equals("buy", StringComparison.OrdinalIgnoreCase);
-                if (!double.TryParse(item[1], out double _price)) continue;
-                if (!double.TryParse(item[2], out double _qty)) continue;
+                if (!WireNumber.TryParseDouble(item[1], out double _price)) continue;
+                if (!WireNumber.TryParseDouble(item[2], out double _qty)) continue;
 
                 if (_qty == 0)
                 {
@@ -844,10 +914,8 @@ namespace MarketConnectors.Gemini
                 //run this because it will allow to reconnect with the new values
                 RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTING));
                 Status = ePluginStatus.STARTING;
-                isReconnecting = true;
                 Task.Run(async () =>
                     await HandleConnectionLost($"{this.Name} is starting (from reloading settings).", null, true));
-                isReconnecting = false;
             };
             // Display the view, perhaps in a dialog or a new window.
             view.DataContext = viewModel;
@@ -966,11 +1034,11 @@ namespace MarketConnectors.Gemini
             List<List<string>> changes = new List<List<string>>();
             snapshotModel.Asks.ToList().ForEach(x =>
             {
-                changes.Add(new List<string>() { "sell", x.Price.Value.ToString(), x.Size.Value.ToString() });
+                changes.Add(new List<string>() { "sell", x.Price.Value.ToString(CultureInfo.InvariantCulture), x.Size.Value.ToString(CultureInfo.InvariantCulture) });
             });
             snapshotModel.Bids.ToList().ForEach(x =>
             {
-                changes.Add(new List<string>() { "buy", x.Price.Value.ToString(), x.Size.Value.ToString() });
+                changes.Add(new List<string>() { "buy", x.Price.Value.ToString(CultureInfo.InvariantCulture), x.Size.Value.ToString(CultureInfo.InvariantCulture) });
             });
 
             UpdateOrderBook(new MarketUpdate()
