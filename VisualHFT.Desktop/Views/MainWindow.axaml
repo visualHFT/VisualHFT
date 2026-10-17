@@ -1,0 +1,761 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:VisualHFT.Desktop.ViewModels"
+        xmlns:views="using:VisualHFT.Desktop.Views"
+        xmlns:screens="using:VisualHFT.Desktop.Screens"
+        x:Class="VisualHFT.Desktop.Views.MainWindow"
+        x:DataType="vm:TerminalViewModel"
+        Title="VisualHFT"
+        Width="1440"
+        Height="900"
+        MinWidth="1100"
+        MinHeight="700"
+        WindowStartupLocation="CenterScreen"
+        Background="#0E1116">
+  <Grid RowDefinitions="Auto,*" Margin="8">
+    <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto">
+      <TextBlock Text="VisualHFT" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" />
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="14,0,0,0" VerticalAlignment="Center">
+        <ComboBox Width="140" MinHeight="32" PlaceholderText="Exchange"
+                  ItemsSource="{Binding Exchanges}" SelectedItem="{Binding SelectedExchange}"
+                  ToolTip.Tip="{Binding CatalogStatus}" />
+        <Grid Width="260" Height="32">
+          <TextBox Name="TickerBox" Classes="search" Watermark="Search ticker…"
+                   Text="{Binding TickerQuery, UpdateSourceTrigger=PropertyChanged}"
+                   KeyDown="TickerKeyDown"
+                   ToolTip.Tip="Type to shortlist tickers on the selected exchange. Enter adds the top match." />
+          <Popup IsOpen="{Binding ShowTickerHits, Mode=OneWay}"
+                 PlacementTarget="TickerBox"
+                 Placement="Bottom"
+                 IsLightDismissEnabled="True"
+                 OverlayDismissEventPassThrough="True">
+            <Border Classes="search-list" Width="260">
+              <ScrollViewer MaxHeight="220">
+                <ItemsControl ItemsSource="{Binding TickerHits}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="screens:TickerHit">
+                      <Button Classes="hit" Click="PickTicker">
+                        <Grid ColumnDefinitions="*,Auto">
+                          <StackPanel Spacing="1">
+                            <TextBlock Text="{Binding Native}" FontWeight="SemiBold" FontSize="12" />
+                            <TextBlock Text="{Binding Normalized}" Classes="muted" FontSize="10" />
+                          </StackPanel>
+                          <Border Grid.Column="1" Classes="kind" VerticalAlignment="Center" Margin="8,0,0,0">
+                            <TextBlock Text="{Binding KindLabel}" FontSize="9" />
+                          </Border>
+                        </Grid>
+                      </Button>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </Border>
+          </Popup>
+        </Grid>
+        <ComboBox Width="140" MinHeight="32" ItemsSource="{Binding AggregationLevels}" SelectedItem="{Binding SelectedAggregation}" />
+        <Button Content="Venues" Classes="quiet" Click="OpenVenues" ToolTip.Tip="Compare mids from every venue for a symbol, with independent aggregation." />
+        <Button Content="Layout" Classes="quiet" Click="CycleLayout" ToolTip.Tip="Cycle order-book layout: side-by-side, mirror, ladder." />
+      </StackPanel>
+      <TextBlock Grid.Column="2" Text="{Binding StatusText}" Classes="muted" VerticalAlignment="Center" />
+
+      <DockPanel Grid.Row="1" Grid.ColumnSpan="3" Margin="0,6,0,0" LastChildFill="True">
+        <TextBlock DockPanel.Dock="Left" Text="{Binding TickerStatus}" Classes="muted" VerticalAlignment="Center" Margin="0,0,10,0" />
+        <ItemsControl IsVisible="{Binding HasWatchlist}" ItemsSource="{Binding Watchlist}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <WrapPanel Orientation="Horizontal" />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:WatchItemRow">
+              <StackPanel Orientation="Horizontal" Margin="0,0,6,4" Spacing="0">
+                <Button Classes="quiet" Background="{Binding ChipBrush}" Click="FocusWatch" Padding="8,3"
+                        ToolTip.Tip="Focus this venue and symbol.">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Text="{Binding Venue}" FontSize="10" Opacity="0.75" />
+                    <TextBlock Text="{Binding Native}" FontWeight="SemiBold" FontSize="11" />
+                    <TextBlock Text="{Binding KindLabel}" FontSize="9" Opacity="0.7" />
+                  </StackPanel>
+                </Button>
+                <Button Classes="quiet" Content="×" Width="22" Padding="0" Click="RemoveWatch" ToolTip.Tip="Remove from the watchlist." />
+              </StackPanel>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </DockPanel>
+
+      <DockPanel Grid.Row="2" Grid.ColumnSpan="3" Margin="0,8,0,4">
+        <Button DockPanel.Dock="Right" Content="{Binding UnreadCount, StringFormat='Alerts {0}'}" Classes="quiet" VerticalAlignment="Bottom" Click="OpenAlerts" />
+        <StackPanel Orientation="Horizontal" Spacing="18" IsVisible="{Binding HasTickerFocus}">
+          <StackPanel>
+            <TextBlock Text="Bid" Classes="label bid" />
+            <StackPanel Orientation="Horizontal" Spacing="1">
+              <TextBlock Text="{Binding BidRest}" Classes="quote-handle bid" VerticalAlignment="Bottom" Margin="0,0,0,1" />
+              <TextBlock Text="." Classes="quote-handle bid" VerticalAlignment="Bottom" Margin="0,0,0,1" />
+              <TextBlock Text="{Binding BidDecimals}" Classes="quote-tick bid" />
+              <TextBlock Text="{Binding BidLast}" Classes="quote-handle bid" VerticalAlignment="Bottom" Margin="1,0,0,1" />
+            </StackPanel>
+            <TextBlock Text="{Binding BidSize}" Classes="muted" />
+          </StackPanel>
+          <StackPanel>
+            <TextBlock Text="Ask" Classes="label ask" />
+            <StackPanel Orientation="Horizontal" Spacing="1">
+              <TextBlock Text="{Binding AskRest}" Classes="quote-handle ask" VerticalAlignment="Bottom" Margin="0,0,0,1" />
+              <TextBlock Text="." Classes="quote-handle ask" VerticalAlignment="Bottom" Margin="0,0,0,1" />
+              <TextBlock Text="{Binding AskDecimals}" Classes="quote-tick ask" />
+              <TextBlock Text="{Binding AskLast}" Classes="quote-handle ask" VerticalAlignment="Bottom" Margin="1,0,0,1" />
+            </StackPanel>
+            <TextBlock Text="{Binding AskSize}" Classes="muted" />
+          </StackPanel>
+          <StackPanel>
+            <TextBlock Text="Mid" Classes="label" />
+            <TextBlock Text="{Binding MidText}" Classes="metric" />
+          </StackPanel>
+          <StackPanel>
+            <TextBlock Text="Spread" Classes="label" />
+            <TextBlock Text="{Binding SpreadText}" Classes="metric" />
+          </StackPanel>
+          <StackPanel>
+            <TextBlock Text="Last trade" Classes="label" />
+            <TextBlock Text="{Binding LastTradeText}" Foreground="{Binding LastTradeBrush}" FontSize="13" FontWeight="SemiBold" />
+          </StackPanel>
+        </StackPanel>
+      </DockPanel>
+      <ItemsControl Grid.Row="3" Grid.ColumnSpan="3" ItemsSource="{Binding Sessions}" Margin="0,0,0,2">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <StackPanel Orientation="Horizontal" Spacing="8" />
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:ProviderSessionRow">
+            <Button Classes="quiet" Click="ToggleProvider" ToolTip.Tip="{Binding ToolTip}"
+                    IsVisible="{Binding ShowInChrome}">
+              <StackPanel Orientation="Horizontal" Spacing="5">
+                <Ellipse Width="8" Height="8" Fill="{Binding StatusBrush}" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding Name}" FontSize="11" />
+                <TextBlock Text="{Binding StatusText}" Classes="muted" />
+              </StackPanel>
+            </Button>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </Grid>
+
+    <TabControl Grid.Row="1" Margin="0,4,0,0">
+      <TabItem Header="Market">
+        <Grid ColumnDefinitions="300,2*,*" RowDefinitions="*,200" Margin="0,6,0,0">
+          <Border Classes="panel" Grid.RowSpan="2">
+            <DockPanel>
+              <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                <TextBlock Text="Order book" FontWeight="SemiBold" FontSize="12" />
+                <TextBlock Text="{Binding BookLayoutLabel}" Classes="muted" HorizontalAlignment="Right" />
+              </DockPanel>
+              <views:ImbalanceGauge DockPanel.Dock="Top" Height="14" Value="{Binding Imbalance}" Margin="0,0,0,6"
+                                    ToolTip.Tip="Limit order book imbalance. Positive leans bid; negative leans ask." />
+              <TextBlock DockPanel.Dock="Top" Text="Asks" Classes="label ask" Margin="0,0,0,2" />
+              <ItemsControl DockPanel.Dock="Top" ItemsSource="{Binding Asks}" MaxHeight="260" IsVisible="{Binding ShowSideBook}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:BookRow">
+                    <Grid ColumnDefinitions="*,72,64" Height="16">
+                      <Border Background="{Binding BarBrush}" Width="{Binding BarWidth}" HorizontalAlignment="Left" />
+                      <TextBlock Text="{Binding PriceText}" Classes="book" Foreground="{Binding PriceBrush}" />
+                      <TextBlock Grid.Column="1" Text="{Binding SizeText}" Classes="book" HorizontalAlignment="Right" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <TextBlock DockPanel.Dock="Top" Text="Bids" Classes="label bid" Margin="0,6,0,2" />
+              <Border DockPanel.Dock="Bottom" BorderBrush="#2A3340" BorderThickness="0,1,0,0" Padding="0,6,0,0" MinHeight="140" MaxHeight="280">
+                <DockPanel>
+                  <TextBlock DockPanel.Dock="Top" Text="Trades" Classes="label" Margin="0,0,0,2" />
+                  <ScrollViewer>
+                    <ItemsControl ItemsSource="{Binding TradeTape}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:TradeTapeRow">
+                          <Grid ColumnDefinitions="58,*,58" Height="16">
+                            <TextBlock Text="{Binding Time}" Classes="muted" />
+                            <TextBlock Grid.Column="1" Text="{Binding Price}" Classes="book" Classes.bid="{Binding IsBuy}" Classes.ask="{Binding IsSell}" />
+                            <TextBlock Grid.Column="2" Text="{Binding Size}" Classes="book" HorizontalAlignment="Right" />
+                          </Grid>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </ScrollViewer>
+                </DockPanel>
+              </Border>
+              <ItemsControl ItemsSource="{Binding Bids}" IsVisible="{Binding ShowSideBook}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:BookRow">
+                    <Grid ColumnDefinitions="*,72,64" Height="16">
+                      <Border Background="{Binding BarBrush}" Width="{Binding BarWidth}" HorizontalAlignment="Left" />
+                      <TextBlock Text="{Binding PriceText}" Classes="book" Foreground="{Binding PriceBrush}" />
+                      <TextBlock Grid.Column="1" Text="{Binding SizeText}" Classes="book" HorizontalAlignment="Right" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <ItemsControl ItemsSource="{Binding DepthMirror}" IsVisible="{Binding ShowMirrorBook}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="screens:DepthMirrorRow">
+                    <Grid ColumnDefinitions="*,*,*,*" Height="16">
+                      <TextBlock Text="{Binding BidSize}" Classes="book bid" />
+                      <TextBlock Grid.Column="1" Text="{Binding BidPrice}" Classes="book bid" />
+                      <TextBlock Grid.Column="2" Text="{Binding AskPrice}" Classes="book ask" />
+                      <TextBlock Grid.Column="3" Text="{Binding AskSize}" Classes="book ask" HorizontalAlignment="Right" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <ItemsControl ItemsSource="{Binding DepthLadder}" IsVisible="{Binding ShowLadderBook}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="screens:DepthLadderRow">
+                    <Grid ColumnDefinitions="*,*" Height="16">
+                      <TextBlock Text="{Binding Price}" Classes="book" Classes.bid="{Binding IsBid}" Classes.ask="{Binding IsAsk}" />
+                      <TextBlock Grid.Column="1" Text="{Binding Size}" Classes="book" HorizontalAlignment="Right" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </DockPanel>
+          </Border>
+
+          <Grid Grid.Column="1" RowDefinitions="*,*,*,80" Margin="8,0">
+            <Border Classes="panel">
+              <DockPanel>
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                  <TextBlock Text="Cumulative depth" FontWeight="SemiBold" FontSize="12" />
+                  <Button Content="Pop" Classes="quiet" HorizontalAlignment="Right" Click="PopDepth" />
+                </DockPanel>
+                <views:DepthChart Bids="{Binding DepthBids}" Asks="{Binding DepthAsks}" />
+              </DockPanel>
+            </Border>
+            <Border Grid.Row="1" Classes="panel" Margin="0,8,0,0">
+              <DockPanel>
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                  <TextBlock Text="Bid, ask, mid and resting size" FontWeight="SemiBold" FontSize="12" />
+                  <Button Content="Pop" Classes="quiet" HorizontalAlignment="Right" Click="PopPrice" />
+                </DockPanel>
+                <views:BookPriceChart Frame="{Binding PriceFrame}" />
+              </DockPanel>
+            </Border>
+            <Border Grid.Row="2" Classes="panel" Margin="0,8,0,0">
+              <DockPanel>
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                  <TextBlock Text="Venue mids" FontWeight="SemiBold" FontSize="12" />
+                  <Button Content="Window" Classes="quiet" HorizontalAlignment="Right" Click="OpenVenues" />
+                </DockPanel>
+                <views:SeriesChart Series="{Binding MidSeries}" />
+              </DockPanel>
+            </Border>
+            <Border Grid.Row="3" Classes="panel" Margin="0,8,0,0">
+              <DockPanel>
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,2">
+                  <TextBlock Text="Spread" FontWeight="SemiBold" FontSize="12" />
+                  <Button Content="Pop" Classes="quiet" HorizontalAlignment="Right" Click="PopSpread" />
+                </DockPanel>
+                <views:SeriesChart Series="{Binding SpreadSeries}" />
+              </DockPanel>
+            </Border>
+          </Grid>
+
+          <Border Grid.Column="2" Classes="panel">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Top" Text="Studies" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,6" />
+              <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding Studies}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <UniformGrid Columns="2" />
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:StudyRow">
+                      <Border Classes="study-tile" ToolTip.Placement="LeftEdgeAlignedTop">
+                        <ToolTip.Tip>
+                          <TextBlock Text="{Binding Tooltip}" TextWrapping="Wrap" MaxWidth="380" FontSize="12" LineHeight="18" />
+                        </ToolTip.Tip>
+                        <DockPanel>
+                          <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="1" HorizontalAlignment="Right">
+                            <Button Classes="icon" Click="OpenStudySettings" ToolTip.Tip="Study settings">
+                              <Path Data="M12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8M12,2L13.1,5.1L16.5,4.3L17.3,7.7L20.5,8.8L18.8,11.7L21,14.2L18.2,16L18.8,19.5L15.5,19.7L13.9,22.8L12,20.8L10.1,22.8L8.5,19.7L5.2,19.5L5.8,16L3,14.2L5.2,11.7L3.5,8.8L6.7,7.7L7.5,4.3L10.9,5.1L12,2Z" />
+                            </Button>
+                            <Button Classes="icon" Click="OpenStudyChart" ToolTip.Tip="Open chart">
+                              <Path Data="M3,17L9,11L13,15L21,6V10H19V8.8L13,16L9,12L5,16V17H3M3,19H21V21H3V19Z" />
+                            </Button>
+                          </StackPanel>
+                          <StackPanel>
+                            <TextBlock Text="{Binding Title}" FontSize="10" FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding ValueText}" FontSize="16" FontWeight="SemiBold"
+                                       FontFamily="Inter, Menlo, monospace" Foreground="{Binding ValueBrush}" />
+                            <TextBlock Text="{Binding Context}" Classes="muted" FontSize="10"
+                                       TextTrimming="CharacterEllipsis" />
+                          </StackPanel>
+                        </DockPanel>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </DockPanel>
+          </Border>
+
+          <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" ColumnDefinitions="*,*" Margin="8,8,0,0">
+            <Border Classes="panel">
+              <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Text="Positions" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,4" />
+                <ScrollViewer HorizontalScrollBarVisibility="Auto">
+                  <StackPanel>
+                    <Grid ColumnDefinitions="90,70,70,80,90,70,70,80,80,80,110" Margin="0,0,0,4">
+                      <TextBlock Text="Symbol" Classes="muted" />
+                      <TextBlock Grid.Column="1" Text="Buy" Classes="muted" />
+                      <TextBlock Grid.Column="2" Text="Sell" Classes="muted" />
+                      <TextBlock Grid.Column="3" Text="Net" Classes="muted" />
+                      <TextBlock Grid.Column="4" Text="Exposure" Classes="muted" />
+                      <TextBlock Grid.Column="5" Text="Wrk buy" Classes="muted" />
+                      <TextBlock Grid.Column="6" Text="Wrk sell" Classes="muted" />
+                      <TextBlock Grid.Column="7" Text="Total" Classes="muted" />
+                      <TextBlock Grid.Column="8" Text="Realized" Classes="muted" />
+                      <TextBlock Grid.Column="9" Text="Open" Classes="muted" />
+                      <TextBlock Grid.Column="10" Text="Updated" Classes="muted" />
+                    </Grid>
+                    <ItemsControl ItemsSource="{Binding Positions}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:PositionRow">
+                          <Grid ColumnDefinitions="90,70,70,80,90,70,70,80,80,80,110" Height="20">
+                            <TextBlock Text="{Binding Symbol}" />
+                            <TextBlock Grid.Column="1" Text="{Binding BuyText}" />
+                            <TextBlock Grid.Column="2" Text="{Binding SellText}" />
+                            <TextBlock Grid.Column="3" Text="{Binding NetText}" />
+                            <TextBlock Grid.Column="4" Text="{Binding ExposureText}" />
+                            <TextBlock Grid.Column="5" Text="{Binding WorkingBuyText}" />
+                            <TextBlock Grid.Column="6" Text="{Binding WorkingSellText}" />
+                            <TextBlock Grid.Column="7" Text="{Binding TotalText}" Background="{Binding PlBrush}" />
+                            <TextBlock Grid.Column="8" Text="{Binding RealizedText}" />
+                            <TextBlock Grid.Column="9" Text="{Binding OpenText}" Background="{Binding OpenBrush}" />
+                            <TextBlock Grid.Column="10" Text="{Binding UpdatedText}" />
+                          </Grid>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </ScrollViewer>
+              </DockPanel>
+            </Border>
+            <Border Grid.Column="1" Classes="panel" Margin="10,0,0,0">
+              <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,6">
+                  <TextBlock Text="Orders" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" />
+                  <Button Content="Working" Classes="quiet" Tag="Working" Click="FilterOrders" />
+                  <Button Content="Filled" Classes="quiet" Tag="Filled" Click="FilterOrders" />
+                  <Button Content="Cancelled" Classes="quiet" Tag="Cancelled" Click="FilterOrders" />
+                  <Button Content="All" Classes="quiet" Tag="All" Click="FilterOrders" />
+                  <TextBlock Text="Session" Classes="muted" VerticalAlignment="Center" />
+                  <DatePicker SelectedDate="{Binding SessionPicked}" Width="168" />
+                </StackPanel>
+                <ScrollViewer HorizontalScrollBarVisibility="Auto">
+                  <StackPanel>
+                    <Grid ColumnDefinitions="90,80,80,120,70,80,50,60,70,80,50,60,80,80,80" Margin="0,0,0,4">
+                      <TextBlock Text="Created" Classes="muted" />
+                      <TextBlock Grid.Column="1" Text="Venue" Classes="muted" />
+                      <TextBlock Grid.Column="2" Text="Symbol" Classes="muted" />
+                      <TextBlock Grid.Column="3" Text="ClOrdId" Classes="muted" />
+                      <TextBlock Grid.Column="4" Text="Qty" Classes="muted" />
+                      <TextBlock Grid.Column="5" Text="Price" Classes="muted" />
+                      <TextBlock Grid.Column="6" Text="Side" Classes="muted" />
+                      <TextBlock Grid.Column="7" Text="Filled" Classes="muted" />
+                      <TextBlock Grid.Column="8" Text="Exec" Classes="muted" />
+                      <TextBlock Grid.Column="9" Text="Avg" Classes="muted" />
+                      <TextBlock Grid.Column="10" Text="TIF" Classes="muted" />
+                      <TextBlock Grid.Column="11" Text="Type" Classes="muted" />
+                      <TextBlock Grid.Column="12" Text="Status" Classes="muted" />
+                      <TextBlock Grid.Column="13" Text="Bid" Classes="muted" />
+                      <TextBlock Grid.Column="14" Text="Ask" Classes="muted" />
+                    </Grid>
+                    <ItemsControl ItemsSource="{Binding Orders}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:OrderRow">
+                          <Grid ColumnDefinitions="90,80,80,120,70,80,50,60,70,80,50,60,80,80,80" Height="20">
+                            <TextBlock Text="{Binding Created}" />
+                            <TextBlock Grid.Column="1" Text="{Binding Provider}" />
+                            <TextBlock Grid.Column="2" Text="{Binding Symbol}" />
+                            <TextBlock Grid.Column="3" Text="{Binding ClientId}" />
+                            <TextBlock Grid.Column="4" Text="{Binding Quantity}" />
+                            <TextBlock Grid.Column="5" Text="{Binding Price}" />
+                            <TextBlock Grid.Column="6" Text="{Binding Side}" Background="{Binding SideBrush}" />
+                            <Grid Grid.Column="7">
+                              <Border Width="{Binding FillBar}" Height="12" Background="#F5C16C" HorizontalAlignment="Left" />
+                              <TextBlock Text="{Binding Filled}" HorizontalAlignment="Center" />
+                            </Grid>
+                            <TextBlock Grid.Column="8" Text="{Binding FilledQuantity}" />
+                            <TextBlock Grid.Column="9" Text="{Binding AveragePrice}" />
+                            <TextBlock Grid.Column="10" Text="{Binding TimeInForce}" />
+                            <TextBlock Grid.Column="11" Text="{Binding Type}" />
+                            <TextBlock Grid.Column="12" Text="{Binding Status}" Background="{Binding StatusBrush}" />
+                            <TextBlock Grid.Column="13" Text="{Binding BestBid}" />
+                            <TextBlock Grid.Column="14" Text="{Binding BestAsk}" />
+                          </Grid>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </ScrollViewer>
+              </DockPanel>
+            </Border>
+          </Grid>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="Plugins">
+        <Grid ColumnDefinitions="2*,*" Margin="0,8,0,0">
+          <ScrollViewer>
+            <ItemsControl ItemsSource="{Binding PluginGroups}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:PluginGroupRow">
+                  <StackPanel Margin="0,0,0,10">
+                    <TextBlock Text="{Binding Kind}" FontWeight="SemiBold" Margin="0,0,0,6" />
+                    <ItemsControl ItemsSource="{Binding Items}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:PluginRow">
+                  <Border Classes="panel" Margin="0,0,0,8">
+                    <Grid ColumnDefinitions="*,Auto">
+                      <StackPanel>
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                        <TextBlock Classes="muted">
+                          <Run Text="{Binding Kind}" />
+                          <Run Text=" · " />
+                          <Run Text="{Binding Version}" />
+                          <Run Text=" · " />
+                          <Run Text="{Binding Status}" />
+                        </TextBlock>
+                        <TextBlock Text="{Binding Description}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                        <TextBlock Text="{Binding CustomUi}" Classes="muted" TextWrapping="Wrap" Margin="0,4,0,0" />
+                      </StackPanel>
+                      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Button Content="Start" Classes="quiet" Command="{Binding StartCommand}" />
+                        <Button Content="Stop" Classes="quiet" Command="{Binding StopCommand}" />
+                        <Button Content="Panel" Classes="quiet" Click="OpenPluginSurface" />
+                        <Button Content="Settings" Classes="quiet" Click="OpenPluginSettings" />
+                      </StackPanel>
+                    </Grid>
+                  </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+          <Border Grid.Column="1" Classes="panel" Margin="10,0,0,0">
+            <DockPanel>
+              <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+                <TextBlock Text="Notifications" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <Button Content="Mark read" Classes="quiet" Click="MarkNotificationsRead" />
+                <Button Content="Clear" Classes="quiet" Click="ClearNotifications" />
+              </StackPanel>
+              <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding Notifications}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:NotificationRow">
+                      <StackPanel Margin="0,0,0,10">
+                        <TextBlock Text="{Binding When}" Classes="muted" />
+                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" Foreground="{Binding Tone}" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+                      </StackPanel>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </DockPanel>
+          </Border>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="Triggers">
+        <DockPanel Margin="0,8,0,0">
+          <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+            <Button Content="New rule" Classes="quiet" Click="AddTriggerRule" />
+            <TextBlock Classes="muted" VerticalAlignment="Center" Text="Every condition must be true at once (AND). Rules are stored in the same file the Windows app uses."
+                       ToolTip.Tip="Pick a study, an operator such as greater than, and a threshold. Add a webhook or in-app alert. A sustained window means the condition must stay true for that duration." />
+          </StackPanel>
+          <ScrollViewer>
+            <ItemsControl ItemsSource="{Binding Rules}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:RuleRow">
+                  <Border Classes="panel" Margin="0,0,0,8">
+                    <Grid ColumnDefinitions="Auto,*,Auto">
+                      <CheckBox IsChecked="{Binding IsEnabled}" VerticalAlignment="Center" />
+                      <StackPanel Grid.Column="1" Margin="10,0">
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding Summary}" Classes="muted" TextWrapping="Wrap" />
+                      </StackPanel>
+                      <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+                        <Button Content="Edit" Classes="quiet" Click="EditTriggerRule" />
+                        <Button Content="Delete" Classes="quiet" Command="{Binding DeleteCommand}" />
+                      </StackPanel>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </TabItem>
+
+      <TabItem Header="Depth">
+        <Grid ColumnDefinitions="*,*" Margin="0,8,0,0">
+          <Border Classes="panel" Margin="0,0,8,0">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Top" Text="Depth mirror" FontWeight="SemiBold" Margin="0,0,0,8" />
+              <Grid DockPanel.Dock="Top" ColumnDefinitions="*,*,*,*,*,*" Margin="0,0,0,4">
+                <TextBlock Text="Size" Classes="muted" />
+                <TextBlock Grid.Column="1" Text="Active" Classes="muted" />
+                <TextBlock Grid.Column="2" Text="Bid" Classes="muted" />
+                <TextBlock Grid.Column="3" Text="Ask" Classes="muted" />
+                <TextBlock Grid.Column="4" Text="Active" Classes="muted" />
+                <TextBlock Grid.Column="5" Text="Size" Classes="muted" />
+              </Grid>
+              <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding DepthMirror}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="screens:DepthMirrorRow">
+                      <Grid ColumnDefinitions="*,*,*,*,*,*" Height="18">
+                        <TextBlock Text="{Binding BidSize}" Classes="bid" />
+                        <TextBlock Grid.Column="1" Text="{Binding BidActive}" Classes="bid" />
+                        <TextBlock Grid.Column="2" Text="{Binding BidPrice}" Classes="bid" />
+                        <TextBlock Grid.Column="3" Text="{Binding AskPrice}" Classes="ask" />
+                        <TextBlock Grid.Column="4" Text="{Binding AskActive}" Classes="ask" />
+                        <TextBlock Grid.Column="5" Text="{Binding AskSize}" Classes="ask" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </DockPanel>
+          </Border>
+          <Border Grid.Column="1" Classes="panel">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Top" Text="Price ladder" FontWeight="SemiBold" Margin="0,0,0,8" />
+              <Grid DockPanel.Dock="Top" ColumnDefinitions="*,*,*" Margin="0,0,0,4">
+                <TextBlock Text="Price" Classes="muted" />
+                <TextBlock Grid.Column="1" Text="Size" Classes="muted" HorizontalAlignment="Right" />
+                <TextBlock Grid.Column="2" Text="Active" Classes="muted" HorizontalAlignment="Right" />
+              </Grid>
+              <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding DepthLadder}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="screens:DepthLadderRow">
+                      <Grid ColumnDefinitions="*,*,*" Height="18">
+                        <TextBlock Text="{Binding Price}" Classes.bid="{Binding IsBid}" Classes.ask="{Binding IsAsk}" />
+                        <TextBlock Grid.Column="1" Text="{Binding Size}" HorizontalAlignment="Right" />
+                        <TextBlock Grid.Column="2" Text="{Binding Active}" HorizontalAlignment="Right" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </DockPanel>
+          </Border>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="Flow">
+        <Grid RowDefinitions="*,*" Margin="0,8,0,0">
+          <Border Classes="panel" Margin="0,0,0,8">
+            <DockPanel>
+              <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                <TextBlock Text="Order-book imbalance" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding FlowImbalanceText}" Foreground="#F5C16C" HorizontalAlignment="Right" />
+              </DockPanel>
+              <views:SeriesChart Series="{Binding FlowImbalance}" />
+            </DockPanel>
+          </Border>
+          <Border Grid.Row="1" Classes="panel">
+            <DockPanel>
+              <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                <TextBlock Text="Mid and microprice" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding FlowMidText}" Foreground="#C084FC" HorizontalAlignment="Right" />
+              </DockPanel>
+              <views:SeriesChart Series="{Binding FlowMid}" />
+            </DockPanel>
+          </Border>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="Reports">
+        <Grid ColumnDefinitions="360,*" Margin="0,8,0,0">
+          <Border Classes="panel">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Top" Text="Session" FontWeight="SemiBold" Margin="0,0,0,8" />
+              <TextBlock Text="{Binding ReportText}" TextWrapping="Wrap" />
+            </DockPanel>
+          </Border>
+          <Border Grid.Column="1" Classes="panel" Margin="10,0,0,0">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Top" Text="Equity" FontWeight="SemiBold" Margin="0,0,0,8" />
+              <views:SeriesChart Series="{Binding EquitySeries}" />
+            </DockPanel>
+          </Border>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="Settings">
+        <Grid ColumnDefinitions="300,*" Margin="0,8,0,0">
+          <Border Classes="panel" Padding="12">
+            <DockPanel>
+              <TextBox DockPanel.Dock="Top" Watermark="Search settings" Text="{Binding SettingsQuery}" MinHeight="32" Margin="0,0,0,8" />
+              <TextBlock DockPanel.Dock="Top" Text="{Binding SettingsNavStatus}" Classes="muted" Margin="2,0,0,10" />
+              <StackPanel DockPanel.Dock="Bottom" Margin="2,12,2,0">
+                <TextBlock Text="SETTINGS FILE" Classes="label" Margin="0,0,0,4" />
+                <TextBlock Text="{Binding SettingsFilePath}" Classes="muted" TextWrapping="Wrap" />
+              </StackPanel>
+              <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                  <StackPanel IsVisible="{Binding HasConnectors}" Margin="0,0,0,12">
+                    <TextBlock Text="CONNECTORS" Classes="label" Margin="10,0,0,6" />
+                    <ItemsControl ItemsSource="{Binding SettingsConnectors}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:SettingsGroupRow">
+                          <Button Classes="nav" Classes.selected="{Binding IsSelected}" IsVisible="{Binding IsShown}" Click="SelectSettingsGroup" Margin="0,1">
+                            <Grid ColumnDefinitions="*,Auto">
+                              <StackPanel>
+                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding Summary}" Classes="muted" TextTrimming="CharacterEllipsis" IsVisible="{Binding HasSummary}" />
+                              </StackPanel>
+                              <Ellipse Grid.Column="1" Width="6" Height="6" Fill="#F5C16C" IsVisible="{Binding IsDirty}" VerticalAlignment="Center" Margin="8,0,0,0" />
+                            </Grid>
+                          </Button>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                  <StackPanel IsVisible="{Binding HasStudies}" Margin="0,0,0,12">
+                    <TextBlock Text="STUDIES" Classes="label" Margin="10,0,0,6" />
+                    <ItemsControl ItemsSource="{Binding SettingsStudies}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:SettingsGroupRow">
+                          <Button Classes="nav" Classes.selected="{Binding IsSelected}" IsVisible="{Binding IsShown}" Click="SelectSettingsGroup" Margin="0,1">
+                            <Grid ColumnDefinitions="*,Auto">
+                              <StackPanel>
+                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding Summary}" Classes="muted" TextTrimming="CharacterEllipsis" IsVisible="{Binding HasSummary}" />
+                              </StackPanel>
+                              <Ellipse Grid.Column="1" Width="6" Height="6" Fill="#F5C16C" IsVisible="{Binding IsDirty}" VerticalAlignment="Center" Margin="8,0,0,0" />
+                            </Grid>
+                          </Button>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                  <StackPanel IsVisible="{Binding HasApplication}" Margin="0,0,0,12">
+                    <TextBlock Text="APPLICATION" Classes="label" Margin="10,0,0,6" />
+                    <ItemsControl ItemsSource="{Binding SettingsApplication}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:SettingsGroupRow">
+                          <Button Classes="nav" Classes.selected="{Binding IsSelected}" IsVisible="{Binding IsShown}" Click="SelectSettingsGroup" Margin="0,1">
+                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
+                          </Button>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                  <StackPanel IsVisible="{Binding HasOther}">
+                    <TextBlock Text="OTHER" Classes="label" Margin="10,0,0,6" />
+                    <ItemsControl ItemsSource="{Binding SettingsOther}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:SettingsGroupRow">
+                          <Button Classes="nav" Classes.selected="{Binding IsSelected}" IsVisible="{Binding IsShown}" Click="SelectSettingsGroup" Margin="0,1">
+                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                          </Button>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                  <TextBlock Text="Nothing matches that search." Classes="muted" Margin="10,4,0,0" IsVisible="{Binding ShowSettingsNoMatch}" />
+                </StackPanel>
+              </ScrollViewer>
+            </DockPanel>
+          </Border>
+
+          <Border Grid.Column="1" Classes="panel" Padding="18,16" Margin="10,0,0,0">
+            <Grid>
+              <StackPanel IsVisible="{Binding ShowSettingsEmpty}" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="6" MaxWidth="380">
+                <TextBlock Text="No settings yet" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                <TextBlock Text="Connectors and studies write their configuration here the first time they run." Classes="muted" TextWrapping="Wrap" TextAlignment="Center" />
+              </StackPanel>
+              <StackPanel IsVisible="{Binding ShowSettingsNoMatch}" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="6" MaxWidth="380">
+                <TextBlock Text="No match" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                <TextBlock Text="Try a plugin name, a symbol, or a field such as API key." Classes="muted" TextWrapping="Wrap" TextAlignment="Center" />
+              </StackPanel>
+              <DockPanel IsVisible="{Binding HasSelectedSettings}">
+                <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,14">
+                  <StackPanel Margin="0,0,16,0">
+                    <TextBlock Text="{Binding SelectedSettingsEyebrow}" Classes="label" />
+                    <TextBlock Text="{Binding SelectedSettingsTitle}" FontSize="18" FontWeight="SemiBold" Margin="0,2,0,0" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding SelectedSettingsSubtitle}" Classes="muted" TextWrapping="Wrap" Margin="0,4,0,0" IsVisible="{Binding SelectedHasSubtitle}" />
+                    <TextBlock Text="Unsaved changes" Foreground="#F5C16C" Margin="0,8,0,0" IsVisible="{Binding SettingsDirty}" />
+                    <TextBlock Text="{Binding SettingsBanner}" Classes="muted" Margin="0,8,0,0" TextWrapping="Wrap" IsVisible="{Binding ShowSettingsSaved}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+                    <Button Content="Reload" Classes="quiet" MinWidth="72" HorizontalContentAlignment="Center" Click="ReloadSettings" />
+                    <Button Content="{Binding SaveSettingsLabel}" Classes="quiet" Classes.primary="{Binding SettingsDirty}" MinWidth="96" HorizontalContentAlignment="Center" Click="SaveSettings" />
+                  </StackPanel>
+                </Grid>
+                <TextBlock DockPanel.Dock="Top" Text="Stored on this machine. Plugins read this file the next time VisualHFT starts." Classes="muted" TextWrapping="Wrap" Margin="0,0,0,4" />
+                <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+                  <ItemsControl ItemsSource="{Binding SelectedSections}" MaxWidth="680" HorizontalAlignment="Left">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:SettingsSectionRow">
+                        <StackPanel Margin="0,16,0,0" IsVisible="{Binding IsShown}">
+                          <Border Height="1" Background="#2A3340" Margin="0,0,0,10" />
+                          <TextBlock Text="{Binding Title}" Classes="label" Margin="0,0,0,12" />
+                          <ItemsControl ItemsSource="{Binding Fields}">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="vm:SettingsFieldRow">
+                                <StackPanel Margin="0,0,0,14" IsVisible="{Binding IsShown}">
+                                  <Grid ColumnDefinitions="200,*" RowDefinitions="Auto,Auto" IsVisible="{Binding ShowLabeled}">
+                                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,12,0" VerticalAlignment="Top">
+                                      <Ellipse Width="6" Height="6" Fill="#F5C16C" Opacity="{Binding DirtyOpacity}" VerticalAlignment="Center" />
+                                      <TextBlock Text="{Binding Label}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <Grid Grid.Column="1" VerticalAlignment="Center">
+                                      <TextBox Classes="value" Text="{Binding Value}" Watermark="{Binding Watermark}" IsVisible="{Binding IsText}" />
+                                      <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding IsSecret}">
+                                        <TextBox Classes="value" Text="{Binding Value}" Watermark="{Binding Watermark}" PasswordChar="{Binding PasswordChar}" />
+                                        <Button Grid.Column="1" Content="{Binding RevealLabel}" Classes="quiet" MinWidth="58" Margin="8,0,0,0" VerticalAlignment="Center" Click="ToggleSecret" />
+                                      </Grid>
+                                      <TextBox Classes="value" Text="{Binding Value}" Watermark="{Binding Watermark}" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="84" MaxHeight="160" IsVisible="{Binding IsMultiline}" />
+                                      <ComboBox Classes="value" ItemsSource="{Binding Choices}" SelectedItem="{Binding SelectedChoice}" HorizontalAlignment="Stretch" MinHeight="32" IsVisible="{Binding IsChoice}">
+                                        <ComboBox.ItemTemplate>
+                                          <DataTemplate x:DataType="screens:SettingsChoice">
+                                            <TextBlock Text="{Binding Label}" />
+                                          </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                      </ComboBox>
+                                    </Grid>
+                                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Hint}" Classes="muted" TextWrapping="Wrap" Margin="0,4,0,0" IsVisible="{Binding ShowLabeledHint}" />
+                                  </Grid>
+                                  <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsBool}">
+                                    <Ellipse Width="6" Height="6" Fill="#F5C16C" Opacity="{Binding DirtyOpacity}" VerticalAlignment="Center" />
+                                    <CheckBox IsChecked="{Binding Flag}" Content="{Binding Label}" />
+                                  </StackPanel>
+                                  <TextBlock Text="{Binding Hint}" Classes="muted" TextWrapping="Wrap" Margin="22,4,0,0" IsVisible="{Binding ShowBoolHint}" />
+                                </StackPanel>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </StackPanel>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </ScrollViewer>
+              </DockPanel>
+            </Grid>
+          </Border>
+        </Grid>
+      </TabItem>
+    </TabControl>
+  </Grid>
+</Window>

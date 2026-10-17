@@ -22,6 +22,8 @@
     <Compile Remove="VisualHFT.Plugins\**" />
     <Compile Remove="VisualHFT.TriggerService.TestingFramework\**" />
     <Compile Remove="tests\**" />
+    <Compile Remove="VisualHFT.Desktop\**" />
+    <Compile Remove="VisualHFT.Runtime\**" />
     <EmbeddedResource Remove="demoTradingCore\**" />
     <EmbeddedResource Remove="packages\**" />
     <EmbeddedResource Remove="SDK-MarketConnectorTemplate\**" />
@@ -33,6 +35,8 @@
     <EmbeddedResource Remove="VisualHFT.Plugins\**" />
     <EmbeddedResource Remove="VisualHFT.TriggerService.TestingFramework\**" />
     <EmbeddedResource Remove="tests\**" />
+    <EmbeddedResource Remove="VisualHFT.Desktop\**" />
+    <EmbeddedResource Remove="VisualHFT.Runtime\**" />
     <None Remove="demoTradingCore\**" />
     <None Remove="packages\**" />
     <None Remove="SDK-MarketConnectorTemplate\**" />
@@ -44,6 +48,8 @@
     <None Remove="VisualHFT.Plugins\**" />
     <None Remove="VisualHFT.TriggerService.TestingFramework\**" />
     <None Remove="tests\**" />
+    <None Remove="VisualHFT.Desktop\**" />
+    <None Remove="VisualHFT.Runtime\**" />
     <Page Remove="demoTradingCore\**" />
     <Page Remove="packages\**" />
     <Page Remove="SDK-MarketConnectorTemplate\**" />
@@ -55,6 +61,8 @@
     <Page Remove="VisualHFT.Plugins\**" />
     <Page Remove="VisualHFT.TriggerService.TestingFramework\**" />
     <Page Remove="tests\**" />
+    <Page Remove="VisualHFT.Desktop\**" />
+    <Page Remove="VisualHFT.Runtime\**" />
   </ItemGroup>
 
   <ItemGroup>
@@ -118,6 +126,7 @@
     <ProjectReference Include="..\oxyplot\Source\OxyPlot\OxyPlot.csproj" />
     <ProjectReference Include="VisualHFT.Commons.WPF\VisualHFT.Commons.WPF.csproj" />
     <ProjectReference Include="VisualHFT.Commons\VisualHFT.Commons.csproj" />
+    <ProjectReference Include="VisualHFT.Runtime\VisualHFT.Runtime.csproj" />
     <ProjectReference Include="VisualHFT.Plugins\MarketConnectors.Binance\MarketConnectors.Binance.csproj" />
     <ProjectReference Include="VisualHFT.Plugins\MarketConnectors.Bitfinex\MarketConnectors.Bitfinex.csproj" />
     <ProjectReference Include="VisualHFT.Plugins\MarketConnectors.BitStamp\MarketConnectors.BitStamp.csproj" />

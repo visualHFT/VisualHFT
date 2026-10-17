@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>VisualHFT.Desktop</RootNamespace>
+    <AssemblyName>VisualHFT</AssemblyName>
+    <ApplicationTitle>VisualHFT</ApplicationTitle>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.6" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.6" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.6" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.6" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="log4net" Version="3.4.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VisualHFT.Commons\VisualHFT.Commons.csproj" />
+    <ProjectReference Include="..\VisualHFT.Runtime\VisualHFT.Runtime.csproj" />
+    <ProjectReference Include="..\VisualHFT.Plugins\MarketConnectors.Binance\MarketConnectors.Binance.csproj" />
+    <ProjectReference Include="..\VisualHFT.Plugins\MarketConnectors.Bitfinex\MarketConnectors.Bitfinex.csproj" />
+    <ProjectReference Include="..\VisualHFT.Plugins\MarketConnectors.BitStamp\MarketConnectors.BitStamp.csproj" />
+    <ProjectReference Include="..\VisualHFT.Plugins\MarketConnectors.Coinbase\MarketConnectors.Coinbase.csproj" />
+    <ProjectReference Include="..\VisualHFT.Plugins\MarketConnectors.Gemini\MarketConnectors.Gemini\MarketConnectors.Gemini.csproj" />
+    <ProjectReference Include="..\VisualHFT.Plugins\MarketConnectors.Kraken\MarketConnectors.Kraken.csproj" />
+    <ProjectReference Include="..\VisualHFT.Plugins\MarketConnectors.KuCoin\MarketConnectors.KuCoin.csproj" />
+    <ProjectReference Include="..\VisualHFT.Plugins\MarketConnectors.WebSocket\MarketConnectors.WebSocket.csproj" />
+    <ProjectReference Include="..\VisualHFT.Plugins\Studies.LOBImbalance\Studies.LOBImbalance.csproj" />
+    <ProjectReference Include="..\VisualHFT.Plugins\Studies.MarketResilience\Studies.MarketResilience.csproj" />
+    <ProjectReference Include="..\VisualHFT.Plugins\Studies.OTT_Ratio\Studies.OTT_Ratio.csproj" />
+    <ProjectReference Include="..\VisualHFT.Plugins\Studies.VPIN\Studies.VPIN.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>VisualHFT.Desktop.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="log4net.config">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

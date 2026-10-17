@@ -83,7 +83,7 @@ namespace VisualHFT.ViewModel
 
         private void ConfigurePlugin(IPlugin plugin)
         {
-            PluginManager.PluginManager.SettingPlugin(plugin);
+            PluginManager.PluginSettingsHost.Show(plugin);
             RefreshButtonsStatus();
         }
 

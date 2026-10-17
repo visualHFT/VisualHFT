@@ -18,6 +18,8 @@ namespace MarketConnectors.Binance.ViewModel
         private string _providerName;
         private List<string> _symbols;
         private string _symbolsText;
+        private List<string> _futuresSymbols;
+        private string _futuresSymbolsText;
         private string _validationMessage;
         private string _successMessage;
         private Action _actionCloseWindow;
@@ -63,6 +65,32 @@ namespace MarketConnectors.Binance.ViewModel
             {
                 _symbols = value;
                 OnPropertyChanged(nameof(Symbols));
+                RaiseCanExecuteChanged();
+            }
+        }
+
+        public string FuturesSymbolsText
+        {
+            get => FuturesSymbols == null ? "" : string.Join(",", FuturesSymbols);
+            set
+            {
+                FuturesSymbols = string.IsNullOrWhiteSpace(value)
+                    ? new List<string>()
+                    : value.Split(',').Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
+                OnPropertyChanged(nameof(FuturesSymbolsText));
+                OnPropertyChanged(nameof(FuturesSymbols));
+                RaiseCanExecuteChanged();
+            }
+        }
+
+        public List<string> FuturesSymbols
+        {
+            get => _futuresSymbols;
+            set
+            {
+                _futuresSymbols = value ?? new List<string>();
+                OnPropertyChanged(nameof(FuturesSymbols));
+                OnPropertyChanged(nameof(FuturesSymbolsText));
                 RaiseCanExecuteChanged();
             }
         }
@@ -151,8 +179,15 @@ namespace MarketConnectors.Binance.ViewModel
                         break;*/
 
                     case nameof(SymbolsText):
-                        if (!Symbols.Any() || Symbols.Any(s => string.IsNullOrWhiteSpace(s)))
-                            return "Symbols cannot be empty and should be comma-separated.";
+                        if (Symbols != null && Symbols.Any(s => string.IsNullOrWhiteSpace(s)))
+                            return "Symbols should be comma-separated.";
+                        if ((Symbols == null || !Symbols.Any()) && (FuturesSymbols == null || !FuturesSymbols.Any()))
+                            return "Enter at least one spot or USD-M futures symbol.";
+                        break;
+
+                    case nameof(FuturesSymbolsText):
+                        if (FuturesSymbols != null && FuturesSymbols.Any(s => string.IsNullOrWhiteSpace(s)))
+                            return "Futures symbols should be comma-separated.";
                         break;
 
                     case nameof(DepthLevels):
@@ -198,6 +233,7 @@ namespace MarketConnectors.Binance.ViewModel
             return string.IsNullOrWhiteSpace(this[nameof(ApiKey)]) &&
                    string.IsNullOrWhiteSpace(this[nameof(ApiSecret)]) &&
                    string.IsNullOrWhiteSpace(this[nameof(SymbolsText)]) &&
+                   string.IsNullOrWhiteSpace(this[nameof(FuturesSymbolsText)]) &&
                    string.IsNullOrWhiteSpace(this[nameof(DepthLevels)]) &&
                    string.IsNullOrWhiteSpace(this[nameof(UpdateIntervalMs)]) &&
                    string.IsNullOrWhiteSpace(this[nameof(ProviderId)]) &&

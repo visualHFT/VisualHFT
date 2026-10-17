@@ -3,8 +3,12 @@ using VisualHFT.Enums;
 using VisualHFT.PluginManager;
 using VisualHFT.UserSettings;
 using MarketConnectors.Coinbase.Model;
+#if WINDOWS
 using MarketConnectors.Coinbase.UserControls;
+#endif
+#if WINDOWS
 using MarketConnectors.Coinbase.ViewModel;
+#endif
 using CryptoExchange.Net.Objects.Sockets;
 using CryptoExchange.Net.Objects;
 using VisualHFT.Commons.Helpers;
@@ -990,6 +994,9 @@ namespace MarketConnectors.Coinbase
         }
         public override object GetUISettings()
         {
+#if !WINDOWS
+            return null;
+#else
             PluginSettingsView view = new PluginSettingsView();
             PluginSettingsViewModel viewModel = new PluginSettingsViewModel(CloseSettingWindow);
             viewModel.ApiSecret = _settings.ApiSecret;
@@ -1018,6 +1025,7 @@ namespace MarketConnectors.Coinbase
             // Display the view, perhaps in a dialog or a new window.
             view.DataContext = viewModel;
             return view;
+#endif
         }
 
 

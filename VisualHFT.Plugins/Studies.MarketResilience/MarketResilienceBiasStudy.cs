@@ -10,8 +10,12 @@ using VisualHFT.Helpers;
 using VisualHFT.Model;
 using VisualHFT.PluginManager;
 using VisualHFT.Studies.MarketResilience.Model;
+#if WINDOWS
 using VisualHFT.Studies.MarketResilience.UserControls;
+#endif
+#if WINDOWS
 using VisualHFT.Studies.MarketResilience.ViewModel;
+#endif
 using VisualHFT.UserSettings;
 
 namespace VisualHFT.Studies
@@ -276,6 +280,9 @@ namespace VisualHFT.Studies
         }
         public override object GetUISettings()
         {
+#if !WINDOWS
+            return null;
+#else
             PluginSettingsView view = new PluginSettingsView();
             PluginSettingsViewModel viewModel = new PluginSettingsViewModel(CloseSettingWindow);
             viewModel.SelectedSymbol = _settings.Symbol;
@@ -299,6 +306,7 @@ namespace VisualHFT.Studies
             // Display the view, perhaps in a dialog or a new window.
             view.DataContext = viewModel;
             return view;
+#endif
         }
 
     }

@@ -2,8 +2,12 @@
 using BitStamp.Net.Models;
 using MarketConnectors.BitStamp;
 using MarketConnectors.BitStamp.Model;
+#if WINDOWS
 using MarketConnectors.BitStamp.UserControls;
+#endif
+#if WINDOWS
 using MarketConnectors.BitStamp.ViewModel;
+#endif
 using Newtonsoft.Json;
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
@@ -450,6 +454,9 @@ namespace MarketConnectors.Gemini
 
         public override object GetUISettings()
         {
+#if !WINDOWS
+            return null;
+#else
             PluginSettingsView view = new PluginSettingsView();
             PluginSettingsViewModel viewModel = new PluginSettingsViewModel(CloseSettingWindow);
             viewModel.ApiSecret = _settings.ApiSecret;
@@ -484,6 +491,7 @@ namespace MarketConnectors.Gemini
 
             view.DataContext = viewModel;
             return view;
+#endif
         }
 
         protected override void InitializeDefaultSettings()

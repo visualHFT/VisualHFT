@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <TargetFramework Condition="!$([MSBuild]::IsOSPlatform('windows'))">net10.0</TargetFramework>
+    <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">net10.0;net10.0-windows10.0.17763.0</TargetFrameworks>
     <Nullable>enable</Nullable>
-    <UseWPF>true</UseWPF>
   </PropertyGroup>
 
   <ItemGroup>
@@ -61,6 +61,18 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\VisualHFT.Commons\VisualHFT.Commons.csproj" />
+  </ItemGroup>
+
+
+  <PropertyGroup>
+    <UseWPF Condition="$(TargetFramework.Contains('-windows'))">true</UseWPF>
+    <DefineConstants Condition="$(TargetFramework.Contains('-windows'))">$(DefineConstants);WINDOWS</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="!$(TargetFramework.Contains('-windows'))">
+    <Compile Remove="UserControls\**\*.cs" />
+    <Compile Remove="ViewModels\**\*.cs" />
+    <Compile Remove="ViewModel\**\*.cs" />
+    <Page Remove="**\*.xaml" />
   </ItemGroup>
 
 </Project>

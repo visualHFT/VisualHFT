@@ -4,8 +4,12 @@ using Bitfinex.Net.Objects.Models;
 using CryptoExchange.Net.Authentication;
 using CryptoExchange.Net.Objects;
 using MarketConnectors.Bitfinex.Model;
+#if WINDOWS
 using MarketConnectors.Bitfinex.UserControls;
+#endif
+#if WINDOWS
 using MarketConnectors.Bitfinex.ViewModel;
+#endif
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -888,6 +892,9 @@ namespace MarketConnectors.Bitfinex
         }
         public override object GetUISettings()
         {
+#if !WINDOWS
+            return null;
+#else
             PluginSettingsView view = new PluginSettingsView();
             PluginSettingsViewModel viewModel = new PluginSettingsViewModel(CloseSettingWindow);
             viewModel.ApiSecret = _settings.ApiSecret;
@@ -916,6 +923,7 @@ namespace MarketConnectors.Bitfinex
             // Display the view, perhaps in a dialog or a new window.
             view.DataContext = viewModel;
             return view;
+#endif
         }
 
 

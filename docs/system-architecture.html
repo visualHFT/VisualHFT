@@ -53,12 +53,12 @@
                         <h2 class="text-3xl font-bold text-center text-[#0d0c22] mb-10">System Architecture</h2>
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
                             <div class="bg-white p-6 rounded-lg shadow-lg border-t-4 border-[#4f46e5] h-full text-center">
-                                <h3 class="text-xl font-bold text-[#4f46e5]">1. Desktop host</h3>
-                                <p class="mt-2 text-sm text-gray-600">The WPF application starts VisualHFT, hosts the dashboard, loads plugins, and owns the trigger-engine configuration.</p>
+                                <h3 class="text-xl font-bold text-[#4f46e5]">1. Desktop hosts</h3>
+                                <p class="mt-2 text-sm text-gray-600">The WPF application is the Windows host. The Avalonia application is the macOS host. Both call the shared plugin loader and render their own dashboard.</p>
                             </div>
                             <div class="bg-white p-6 rounded-lg shadow-lg border-t-4 border-[#10b981] h-full text-center">
                                 <h3 class="text-xl font-bold text-[#10b981]">2. Shared libraries</h3>
-                                <p class="mt-2 text-sm text-gray-600"><code>VisualHFT.Commons</code> owns shared models, helpers, and plugin contracts. <code>VisualHFT.Commons.WPF</code> adds reusable WPF support on top of Commons.</p>
+                                <p class="mt-2 text-sm text-gray-600"><code>VisualHFT.Commons</code> owns shared models, helpers, and plugin contracts. <code>VisualHFT.Runtime</code> owns plugin discovery and the trigger engine. <code>VisualHFT.Commons.WPF</code> adds reusable WPF support for the Windows host only.</p>
                             </div>
                             <div class="bg-white p-6 rounded-lg shadow-lg border-t-4 border-[#ef4444] h-full text-center">
                                 <h3 class="text-xl font-bold text-[#ef4444]">3. Plugin assemblies</h3>
@@ -127,7 +127,7 @@
                     <div id="Plugins" class="page-content">
                         <h2 class="text-3xl font-bold text-center text-[#0d0c22] mb-10">The Plugin Ecosystem: A Framework for Extensibility</h2>
                         <div class="bg-white rounded-lg shadow-lg p-8">
-                            <p class="text-center text-gray-600 mb-8">At startup, <code>PluginManager</code> scans the directory containing <code>VisualHFT.exe</code>, finds non-abstract exported types implementing <code>IPlugin</code>, and starts the applicable connector, study, or multi-study lifecycle.</p>
+                            <p class="text-center text-gray-600 mb-8">At startup, <code>PluginManager</code> scans the base directory of the running host, finds non-abstract exported types implementing <code>IPlugin</code>, and starts the applicable connector, study, or multi-study lifecycle. A DLL that is not a plugin is skipped.</p>
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
                                 <div class="border-dashed border-2 border-gray-400 p-6 rounded-lg text-center">
                                     <h3 class="text-xl font-bold text-gray-700">Data Retriever Plugin</h3>
@@ -171,9 +171,9 @@
                                 <ul class="space-y-4 text-gray-600">
                                     <li><span class="font-bold text-gray-800">Framework:</span> .NET 10</li>
                                     <li><span class="font-bold text-gray-800">Language:</span> C#</li>
-                                    <li><span class="font-bold text-gray-800">UI:</span> Windows Presentation Foundation (WPF)</li>
+                                    <li><span class="font-bold text-gray-800">UI:</span> WPF on Windows, Avalonia on macOS</li>
                                     <li><span class="font-bold text-gray-800">Pattern:</span> Model-View-ViewModel (MVVM)</li>
-                                    <li><span class="font-bold text-gray-800">Platform:</span> Windows Only</li>
+                                    <li><span class="font-bold text-gray-800">Platform:</span> Windows host and macOS host, shared plugin contracts</li>
                                 </ul>
                             </div>
                             <div class="bg-white rounded-lg shadow-lg p-8">

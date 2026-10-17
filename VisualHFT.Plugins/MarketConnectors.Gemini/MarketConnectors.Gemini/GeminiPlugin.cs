@@ -1,8 +1,12 @@
 ﻿using Gemini.Net.Clients;
 using Gemini.Net.Models;
 using MarketConnectors.Gemini.Model;
+#if WINDOWS
 using MarketConnectors.Gemini.UserControls;
+#endif
+#if WINDOWS
 using MarketConnectors.Gemini.ViewModel;
+#endif
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System.Collections.Concurrent;
@@ -883,6 +887,9 @@ namespace MarketConnectors.Gemini
 
         public override object GetUISettings()
         {
+#if !WINDOWS
+            return null;
+#else
             PluginSettingsView view = new PluginSettingsView();
             PluginSettingsViewModel viewModel = new PluginSettingsViewModel(CloseSettingWindow);
             viewModel.ApiSecret = _settings.ApiSecret;
@@ -910,6 +917,7 @@ namespace MarketConnectors.Gemini
             // Display the view, perhaps in a dialog or a new window.
             view.DataContext = viewModel;
             return view;
+#endif
         }
         protected override void InitializeDefaultSettings()
         {

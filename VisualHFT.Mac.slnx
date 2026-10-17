@@ -1,0 +1,27 @@
+<Solution>
+  <Folder Name="/VisualHFT.Plugins/">
+    <Project Path="VisualHFT.Plugins/MarketConnectors.Binance/MarketConnectors.Binance.csproj" />
+    <Project Path="VisualHFT.Plugins/MarketConnectors.Bitfinex/MarketConnectors.Bitfinex.csproj" />
+    <Project Path="VisualHFT.Plugins/MarketConnectors.BitStamp/MarketConnectors.BitStamp.csproj" />
+    <Project Path="VisualHFT.Plugins/MarketConnectors.Coinbase/MarketConnectors.Coinbase.csproj" />
+    <Project Path="VisualHFT.Plugins/MarketConnectors.Kraken/MarketConnectors.Kraken.csproj" />
+    <Project Path="VisualHFT.Plugins/MarketConnectors.KuCoin/MarketConnectors.KuCoin.csproj" />
+    <Project Path="VisualHFT.Plugins/MarketConnectors.WebSocket/MarketConnectors.WebSocket.csproj" />
+    <Project Path="VisualHFT.Plugins/Studies.LOBImbalance/Studies.LOBImbalance.csproj" />
+    <Project Path="VisualHFT.Plugins/Studies.MarketResilience/Studies.MarketResilience.csproj" />
+    <Project Path="VisualHFT.Plugins/Studies.OTT_Ratio/Studies.OTT_Ratio.csproj" />
+    <Project Path="VisualHFT.Plugins/Studies.VPIN/Studies.VPIN.csproj" />
+  </Folder>
+  <Folder Name="/VisualHFT.Plugins/MarketConnectors.BaseDAL/">
+    <Project Path="VisualHFT.Plugins/MarketConnectors.BaseDAL/BitStamp.Net/BitStamp.Net.csproj" />
+    <Project Path="VisualHFT.Plugins/MarketConnectors.BaseDAL/Gemini.Net/Gemini.Net.csproj" />
+  </Folder>
+  <Folder Name="/VisualHFT.Plugins/MarketConnectors.Gemini/">
+    <Project Path="VisualHFT.Plugins/MarketConnectors.Gemini/MarketConnectors.Gemini/MarketConnectors.Gemini.csproj" />
+  </Folder>
+  <Project Path="VisualHFT.Commons/VisualHFT.Commons.csproj" />
+  <Project Path="VisualHFT.Runtime/VisualHFT.Runtime.csproj" />
+  <Project Path="VisualHFT.Desktop/VisualHFT.Desktop.csproj" />
+  <Project Path="tests/Unit/VisualHFT.Runtime.Tests/VisualHFT.Runtime.Tests.csproj" />
+  <Project Path="tests/Unit/VisualHFT.Desktop.Tests/VisualHFT.Desktop.Tests.csproj" />
+</Solution>

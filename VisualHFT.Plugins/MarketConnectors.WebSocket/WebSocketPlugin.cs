@@ -1,6 +1,10 @@
 ﻿using MarketConnectors.WebSocket.Model;
+#if WINDOWS
 using MarketConnectors.WebSocket.UserControls;
+#endif
+#if WINDOWS
 using MarketConnectors.WebSocket.ViewModel;
+#endif
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -175,6 +179,9 @@ namespace MarketConnectors.WebSocket
         }
         public override object GetUISettings()
         {
+#if !WINDOWS
+            return null;
+#else
             PluginSettingsView view = new PluginSettingsView();
             PluginSettingsViewModel viewModel = new PluginSettingsViewModel(CloseSettingWindow);
             viewModel.HostName = _settings.HostName;
@@ -198,6 +205,7 @@ namespace MarketConnectors.WebSocket
             // Display the view, perhaps in a dialog or a new window.
             view.DataContext = viewModel;
             return view;
+#endif
         }
         protected override void InitializeDefaultSettings()
         {

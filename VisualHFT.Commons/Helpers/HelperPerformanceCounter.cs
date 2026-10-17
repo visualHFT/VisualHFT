@@ -32,26 +32,33 @@ namespace VisualHFT.Commons.Helpers
 
         private void CreateOrUpdateCategory(string categoryName, string categoryDescription)
         {
-            //PerformanceCounterCategory.Delete(categoryName);
-            
-            if (!PerformanceCounterCategory.Exists(categoryName))
+            // Windows performance counters are unavailable on macOS. Callers still run;
+            // the increment methods no-op when the counters were not created.
+            try
             {
-                try
+                if (!PerformanceCounterCategory.Exists(categoryName))
                 {
-                    CounterCreationDataCollection counters = new CounterCreationDataCollection
+                    try
                     {
-                        new CounterCreationData("ItemsInQueue", "Number of items in the queue", PerformanceCounterType.NumberOfItems32),
-                        new CounterCreationData("AddThroughput", "Add throughput of the queue", PerformanceCounterType.RateOfCountsPerSecond32),
-                        new CounterCreationData("ProcessThroughput", "Process throughput of the queue", PerformanceCounterType.RateOfCountsPerSecond32),
-                        new CounterCreationData("Latency", "Latency of items being processed", PerformanceCounterType.AverageTimer32),
-                        new CounterCreationData("LatencyBase", "Base counter for latency", PerformanceCounterType.AverageBase)
-                    };
-                    PerformanceCounterCategory.Create(categoryName, categoryDescription, PerformanceCounterCategoryType.MultiInstance, counters);
+                        CounterCreationDataCollection counters = new CounterCreationDataCollection
+                        {
+                            new CounterCreationData("ItemsInQueue", "Number of items in the queue", PerformanceCounterType.NumberOfItems32),
+                            new CounterCreationData("AddThroughput", "Add throughput of the queue", PerformanceCounterType.RateOfCountsPerSecond32),
+                            new CounterCreationData("ProcessThroughput", "Process throughput of the queue", PerformanceCounterType.RateOfCountsPerSecond32),
+                            new CounterCreationData("Latency", "Latency of items being processed", PerformanceCounterType.AverageTimer32),
+                            new CounterCreationData("LatencyBase", "Base counter for latency", PerformanceCounterType.AverageBase)
+                        };
+                        PerformanceCounterCategory.Create(categoryName, categoryDescription, PerformanceCounterCategoryType.MultiInstance, counters);
+                    }
+                    catch (Exception ex)
+                    {
+                        log.Error(ex);
+                    }
                 }
-                catch (Exception ex)
-                {
-                    log.Error(ex);
-                }
+            }
+            catch (Exception ex)
+            {
+                log.Error(ex);
             }
         }
 
@@ -75,24 +82,26 @@ namespace VisualHFT.Commons.Helpers
 
         public void QueueItemAdded()
         {
-            _itemsInQueueCounter.Increment();
-            _addThroughputCounter.Increment();
+            _itemsInQueueCounter?.Increment();
+            _addThroughputCounter?.Increment();
         }
 
         public void QueueItemRemoved()
         {
-            _itemsInQueueCounter.Decrement();
-            _processThroughputCounter.Increment();
+            _itemsInQueueCounter?.Decrement();
+            _processThroughputCounter?.Increment();
         }
 
         public void UpdateLatency(long latency)
         {
-            _latencyCounter.IncrementBy(latency);
-            _latencyBaseCounter.Increment();
+            _latencyCounter?.IncrementBy(latency);
+            _latencyBaseCounter?.Increment();
         }
 
         private void ResetCounters()
         {
+            if (_itemsInQueueCounter == null)
+                return;
             _itemsInQueueCounter.RawValue = 0;
             _addThroughputCounter.RawValue = 0;
             _processThroughputCounter.RawValue = 0;
@@ -103,11 +112,11 @@ namespace VisualHFT.Commons.Helpers
         public void Dispose()
         {
             ResetCounters();
-            _itemsInQueueCounter.Dispose();
-            _addThroughputCounter.Dispose();
-            _processThroughputCounter.Dispose();
-            _latencyCounter.Dispose();
-            _latencyBaseCounter.Dispose();
+            _itemsInQueueCounter?.Dispose();
+            _addThroughputCounter?.Dispose();
+            _processThroughputCounter?.Dispose();
+            _latencyCounter?.Dispose();
+            _latencyBaseCounter?.Dispose();
         }
     }
 }

@@ -8,8 +8,12 @@ using Kucoin.Net.Interfaces.Clients;
 using Kucoin.Net.Objects.Models.Spot;
 using Kucoin.Net.Objects.Models.Spot.Socket;
 using MarketConnectors.KuCoin.Model;
+#if WINDOWS
 using MarketConnectors.KuCoin.UserControls;
+#endif
+#if WINDOWS
 using MarketConnectors.KuCoin.ViewModel;
+#endif
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
@@ -1150,6 +1154,9 @@ namespace MarketConnectors.KuCoin
         }
         public override object GetUISettings()
         {
+#if !WINDOWS
+            return null;
+#else
             PluginSettingsView view = new PluginSettingsView();
             PluginSettingsViewModel viewModel = new PluginSettingsViewModel(CloseSettingWindow);
             viewModel.ApiSecret = _settings.ApiSecret;
@@ -1181,6 +1188,7 @@ namespace MarketConnectors.KuCoin
             // Display the view, perhaps in a dialog or a new window.
             view.DataContext = viewModel;
             return view;
+#endif
         }
 
 

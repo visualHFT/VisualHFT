@@ -1,39 +1,32 @@
 ﻿using System.Diagnostics;
-using System.Runtime.InteropServices;
 
 
 namespace VisualHFT.Commons.Helpers
 {
     public static class HelperHighResolutionTimer
     {
-        [DllImport("Kernel32.dll")]
-        private static extern bool QueryPerformanceCounter(out long lpPerformanceCount);
-
-        [DllImport("Kernel32.dll")]
-        private static extern bool QueryPerformanceFrequency(out long lpFrequency);
-
+        // Stopwatch uses QueryPerformanceCounter on Windows and mach_absolute_time on macOS,
+        // so the same busy-wait math stays valid on both platforms.
         private static long _FREQUENCY = 0;
 
         public static void DelayNanoseconds(long nanosecondsToWait, Func<double> getPlaybackFactor, Func<bool> isPaused, Action<long> updateUI, CancellationTokenSource cancellationTokenSource)
         {
             if (nanosecondsToWait < 0) return;
 
-            QueryPerformanceCounter(out long startTicks);
-            long frequency;
-            QueryPerformanceFrequency(out frequency);
+            long startTicks = Stopwatch.GetTimestamp();
+            long frequency = Stopwatch.Frequency;
             double tickDurationInNanoseconds = 1_000_000_000.0 / frequency; // Converts ticks to nanoseconds
-
-            long ticksToWait = (long)(nanosecondsToWait / tickDurationInNanoseconds); // Convert nanoseconds input into ticks
 
             long lastTicks = startTicks;
             long elapsedTicks = 0;
 
-            while (QueryPerformanceCounter(out long currentTicks))
+            while (true)
             {
-                if (cancellationTokenSource.Token.IsCancellationRequested)
+                long currentTicks = Stopwatch.GetTimestamp();
+                if (cancellationTokenSource != null && cancellationTokenSource.Token.IsCancellationRequested)
                     break;
 
-                if (isPaused())
+                if (isPaused != null && isPaused())
                     break;
 
                 double playbackFactor = getPlaybackFactor();
@@ -43,7 +36,7 @@ namespace VisualHFT.Commons.Helpers
                 if (elapsedTicks * tickDurationInNanoseconds >= nanosecondsToWait)
                     break;
 
-                updateUI((long)(elapsedTicks * tickDurationInNanoseconds)); // Send nanoseconds to UI
+                updateUI?.Invoke((long)(elapsedTicks * tickDurationInNanoseconds)); // Send nanoseconds to UI
 
                 lastTicks = currentTicks;
             }
@@ -62,22 +55,23 @@ namespace VisualHFT.Commons.Helpers
 
             if (microsecondsToWait < 0) return;
             if (_FREQUENCY == 0)
-                QueryPerformanceFrequency(out _FREQUENCY);
+                _FREQUENCY = Stopwatch.Frequency;
 
 
-            QueryPerformanceCounter(out long startTicks);
+            long startTicks = Stopwatch.GetTimestamp();
 
             double tickDurationInMicroseconds = _FREQUENCY / 1_000_000.0; // Converts ticks to microseconds
 
             long lastTicks = startTicks;
             long elapsedTicks = 0;
 
-            while (QueryPerformanceCounter(out long currentTicks))
+            while (true)
             {
-                if (cancellationTokenSource.Token.IsCancellationRequested)
+                long currentTicks = Stopwatch.GetTimestamp();
+                if (cancellationTokenSource != null && cancellationTokenSource.Token.IsCancellationRequested)
                     break;
 
-                if (isPaused())
+                if (isPaused != null && isPaused())
                     break;
 
                 double playbackFactor = getPlaybackFactor();
@@ -87,7 +81,7 @@ namespace VisualHFT.Commons.Helpers
                 if (elapsedTicks / tickDurationInMicroseconds >= microsecondsToWait)
                     break;
 
-                updateUI((long)(elapsedTicks)); // Send microseconds to UI
+                updateUI?.Invoke((long)(elapsedTicks)); // Send microseconds to UI
 
                 lastTicks = currentTicks;
             }

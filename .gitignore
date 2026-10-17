@@ -261,3 +261,9 @@ __pycache__/
 *.pyc
 /App.config
 /VisualHFT.csproj.bak
+
+# Local planning notes (project-dissection, Nuxt specs, etc.).
+# Official GitHub Pages files already in the repo stay tracked; nothing new under docs/ is added.
+/docs/
+
+.DS_Store

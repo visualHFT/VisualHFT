@@ -25,6 +25,7 @@
 
   <ItemGroup>
 	<ProjectReference Include="..\..\..\VisualHFT.csproj" />
+	<ProjectReference Include="..\..\..\VisualHFT.Runtime\VisualHFT.Runtime.csproj" />
   </ItemGroup>
 
   <ItemGroup>

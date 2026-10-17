@@ -116,6 +116,10 @@
                 </TextBox.Style>
             </TextBox>
 
+            <Label Content="USD-M futures symbols (comma separated)" Margin="0,20,0,0"/>
+            <TextBox Text="{Binding FuturesSymbolsText, ValidatesOnDataErrors=True, UpdateSourceTrigger=PropertyChanged}" Margin="0,5"
+                     ToolTip="Binance.com perpetuals, for example ETHUSDT,SOLUSDT,XRPUSDT. These use Binance.com even when the US checkbox is off." />
+
             <Label Content="Depth Levels" Margin="0,20,0,0"/>
             <TextBox Text="{Binding DepthLevels, ValidatesOnDataErrors=True, UpdateSourceTrigger=PropertyChanged}" Margin="0,5" />
 

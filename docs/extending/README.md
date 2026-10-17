@@ -11,6 +11,6 @@ Both templates compile against the current shared plugin APIs. Follow the linked
 
 ## Loading an extension
 
-VisualHFT discovers plugin DLLs in the directory that contains `VisualHFT.exe`. For a source build, add the extension project as a `ProjectReference` in `VisualHFT.csproj`, then rebuild the solution. No manual registration is required.
+Each host discovers plugin DLLs in its own base directory. For a source build, add the extension project as a `ProjectReference` of the host that should ship it: `VisualHFT.csproj` for the WPF host, `VisualHFT.Desktop.csproj` for the Avalonia host. Rebuild that host. No manual registration is required. WPF settings views stay on the `net10.0-windows` target. The Avalonia host edits the settings model when `GetUISettings()` returns null.
 
 See the [architecture overview](../architecture.md) for the data flow and plugin boundary.

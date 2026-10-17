@@ -9,6 +9,11 @@ namespace MarketConnectors.Binance.Model
         public string ApiKey { get; set; }
         public string ApiSecret { get; set; }
         public List<string> Symbols { get; set; }
+        /// <summary>
+        /// USD-M perpetual symbols on Binance.com, for example ETHUSDT(ETH/USD).
+        /// These stream from fapi even when the spot connection is Binance.US.
+        /// </summary>
+        public List<string> FuturesSymbols { get; set; }
         public int DepthLevels { get; set; }
         public int UpdateIntervalMs { get; set; }
         public bool IsNonUS { get; set; }

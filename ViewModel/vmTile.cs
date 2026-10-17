@@ -325,10 +325,10 @@ namespace VisualHFT.ViewModel
         private void OpenSettings(object obj)
         {
             if (_study != null)
-                PluginManager.PluginManager.SettingPlugin((PluginManager.IPlugin)_study);
+                PluginManager.PluginSettingsHost.Show((PluginManager.IPlugin)_study);
             else if (_multiStudy != null)
             {
-                PluginManager.PluginManager.SettingPlugin((PluginManager.IPlugin)_multiStudy);
+                PluginManager.PluginSettingsHost.Show((PluginManager.IPlugin)_multiStudy);
                 foreach (var child in ChildTiles)
                 {
                     child.UpdateAllUI();
@@ -336,7 +336,7 @@ namespace VisualHFT.ViewModel
             }
             else if (_plugin != null)
             {
-                PluginManager.PluginManager.SettingPlugin(_plugin);
+                PluginManager.PluginSettingsHost.Show(_plugin);
             }
             RaisePropertyChanged(nameof(SelectedSymbol));
             RaisePropertyChanged(nameof(SelectedProviderName));

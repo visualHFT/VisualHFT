@@ -5,7 +5,9 @@ using Binance.Net.Objects.Models.Spot;
 using CryptoExchange.Net.Authentication;
 using CryptoExchange.Net.Objects;
 using MarketConnectors.Binance.Model;
+#if WINDOWS
 using MarketConnectors.Binance.ViewModel;
+#endif
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -19,7 +21,9 @@ using VisualHFT.Commons.Pools;
 using VisualHFT.Enums;
 using VisualHFT.PluginManager;
 using VisualHFT.UserSettings;
+#if WINDOWS
 using MarketConnectors.Binance.UserControls;
+#endif
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Spot.Socket;
 using Binance.Net.Objects.Models;
@@ -51,6 +55,14 @@ namespace MarketConnectors.Binance
 
         private WebSocketResult<UpdateSubscription> deltaSubscription;
         private WebSocketResult<UpdateSubscription> tradesSubscription;
+        private WebSocketResult<UpdateSubscription> futuresDeltaSubscription;
+        private WebSocketResult<UpdateSubscription> futuresTradesSubscription;
+        private BinanceSocketClient _futuresSocketClient;
+        private BinanceRestClient _futuresRestClient;
+        private HelperCustomQueue<IBinanceFuturesEventOrderBook> _futuresEventBuffers;
+        private HelperCustomQueue<BinanceStreamAggregatedTrade> _futuresTradesBuffers;
+        private Dictionary<string, string> _futuresNormalized = new Dictionary<string, string>();
+        private readonly ConcurrentDictionary<string, byte> _futuresSynced = new ConcurrentDictionary<string, byte>();
 
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
@@ -115,16 +127,22 @@ namespace MarketConnectors.Binance
             try
             {
                 await ClearAsync();
+                LoadSymbolMaps();
                 await SetupClientsAsync();
 
                 _tradesBuffers = new HelperCustomQueue<IBinanceTrade>($"<IBinanceTrade>_{this.Name}", tradesBuffers_onReadAction, tradesBuffers_onErrorAction);
                 _eventBuffers = new HelperCustomQueue<IBinanceEventOrderBook>($"<IBinanceEventOrderBook>_{this.Name}", eventBuffers_onReadAction, eventBuffers_onErrorAction);
+                _futuresTradesBuffers = new HelperCustomQueue<BinanceStreamAggregatedTrade>($"<IBinanceTradeFutures>_{this.Name}", futuresTrades_onReadAction, tradesBuffers_onErrorAction);
+                _futuresEventBuffers = new HelperCustomQueue<IBinanceFuturesEventOrderBook>($"<IBinanceFuturesEventOrderBook>_{this.Name}", futuresBuffers_onReadAction, eventBuffers_onErrorAction);
 
                 _eventBuffers.PauseConsumer();
+                _futuresEventBuffers.PauseConsumer();
 
                 await InitializeDeltasAsync();
+                await InitializeFuturesDeltasAsync();
                 await InitializeSnapshotsAsync();
                 await InitializeTradesAsync();
+                await InitializeFuturesTradesAsync();
                 await InitializePingTimerAsync();
                 await InitializeUserPrivateOrders();
 
@@ -161,12 +179,27 @@ namespace MarketConnectors.Binance
         {
             UnattachEventHandlers(deltaSubscription?.Data);
             UnattachEventHandlers(tradesSubscription?.Data);
+            UnattachEventHandlers(futuresDeltaSubscription?.Data);
+            UnattachEventHandlers(futuresTradesSubscription?.Data);
             if (_socketClient != null)
                 await _socketClient.UnsubscribeAllAsync();
+            if (_futuresSocketClient != null)
+                await _futuresSocketClient.UnsubscribeAllAsync();
             if (deltaSubscription != null && deltaSubscription.Data != null)
                 await deltaSubscription.Data.CloseAsync();
             if (tradesSubscription != null && tradesSubscription.Data != null)
                 await tradesSubscription.Data.CloseAsync();
+            if (futuresDeltaSubscription != null && futuresDeltaSubscription.Data != null)
+                await futuresDeltaSubscription.Data.CloseAsync();
+            if (futuresTradesSubscription != null && futuresTradesSubscription.Data != null)
+                await futuresTradesSubscription.Data.CloseAsync();
+            futuresDeltaSubscription = null;
+            futuresTradesSubscription = null;
+            _futuresSocketClient?.Dispose();
+            _futuresRestClient?.Dispose();
+            _futuresSocketClient = null;
+            _futuresRestClient = null;
+            _futuresSynced.Clear();
             _timerPing?.Stop();
             _timerPing?.Dispose();
 
@@ -189,6 +222,26 @@ namespace MarketConnectors.Binance
             catch (Exception ex)
             {
                 log.Debug($"Error disposing trades buffer: {ex.Message}");
+            }
+
+            try
+            {
+                _futuresEventBuffers?.Stop();
+                _futuresEventBuffers?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                log.Debug($"Error disposing futures event buffer: {ex.Message}");
+            }
+
+            try
+            {
+                _futuresTradesBuffers?.Stop();
+                _futuresTradesBuffers?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                log.Debug($"Error disposing futures trades buffer: {ex.Message}");
             }
 
             // ✅ FIX: Safe OrderBook disposal with snapshot
@@ -234,9 +287,32 @@ namespace MarketConnectors.Binance
                 else
                     options.Environment = BinanceEnvironment.Us;
             });
+
+            _futuresSocketClient?.Dispose();
+            _futuresRestClient?.Dispose();
+            _futuresSocketClient = null;
+            _futuresRestClient = null;
+            if (_futuresNormalized.Count == 0)
+                return;
+
+            // USD-M perpetuals exist on Binance.com only. Binance.US has no fapi host.
+            _futuresSocketClient = new BinanceSocketClient(options =>
+            {
+                if (_settings.ApiKey != "" && _settings.ApiSecret != "")
+                    options.ApiCredentials = new BinanceCredentials(_settings.ApiKey, _settings.ApiSecret);
+                options.Environment = BinanceEnvironment.Live;
+            });
+            _futuresRestClient = new BinanceRestClient(options =>
+            {
+                if (_settings.ApiKey != "" && _settings.ApiSecret != "")
+                    options.ApiCredentials = new BinanceCredentials(_settings.ApiKey, _settings.ApiSecret);
+                options.Environment = BinanceEnvironment.Live;
+            });
         }
         private async Task InitializeTradesAsync()
         {
+            if (GetAllNonNormalizedSymbols().Count == 0)
+                return;
             log.Info($"{this.Name}: sending WS Trades Subscription to all symbols ");
             tradesSubscription = await _socketClient.SpotApi.ExchangeData.SubscribeToTradeUpdatesAsync(
                 GetAllNonNormalizedSymbols(),
@@ -271,8 +347,74 @@ namespace MarketConnectors.Binance
                 throw new Exception(_error);
             }
         }
+        private async Task InitializeFuturesTradesAsync()
+        {
+            if (_futuresSocketClient == null || _futuresNormalized.Count == 0)
+                return;
+            log.Info($"{this.Name}: sending USD-M futures aggregated trade subscription.");
+            futuresTradesSubscription = await _futuresSocketClient.UsdFuturesApi.ExchangeData.SubscribeToAggregatedTradeUpdatesAsync(
+                _futuresNormalized.Keys,
+                trade =>
+                {
+                    if (trade.Data == null)
+                        return;
+                    try
+                    {
+                        _futuresTradesBuffers.Add(trade.Data);
+                    }
+                    catch (Exception ex)
+                    {
+                        var normalizedSymbol = NormalizeFutures(trade.Data.Symbol);
+                        var error = $"Will reconnect. Unhandled error while receiving futures trades for {normalizedSymbol}.";
+                        LogException(ex, error);
+                        Task.Run(async () => await HandleConnectionLost(error, ex));
+                    }
+                });
+            if (futuresTradesSubscription.Success)
+                AttachEventHandlers(futuresTradesSubscription.Data);
+            else
+                throw new Exception($"Unsuccessful futures trades subscription error: {futuresTradesSubscription.Error}");
+        }
+        private async Task InitializeFuturesDeltasAsync()
+        {
+            if (_futuresSocketClient == null || _futuresNormalized.Count == 0)
+                return;
+            log.Info($"{this.Name}: sending USD-M futures depth subscription for {string.Join(",", _futuresNormalized.Keys)}.");
+            futuresDeltaSubscription = await _futuresSocketClient.UsdFuturesApi.ExchangeData.SubscribeToOrderBookUpdatesAsync(
+                _futuresNormalized.Keys,
+                BinanceFuturesFeed.UpdateInterval(_settings.UpdateIntervalMs),
+                data =>
+                {
+                    if (data.Data == null)
+                        return;
+                    try
+                    {
+                        if (Math.Abs(DateTime.Now.Subtract(data.ReceiveTime.ToLocalTime()).TotalSeconds) > 1)
+                        {
+                            var message = $"Futures rates are coming late at {Math.Abs(DateTime.Now.Subtract(data.ReceiveTime.ToLocalTime()).TotalSeconds)} seconds.";
+                            log.Warn(message);
+                            HelperNotificationManager.Instance.AddNotification(this.Name, message, HelprNorificationManagerTypes.WARNING, HelprNorificationManagerCategories.PLUGINS);
+                        }
+                        _futuresEventBuffers.Add(data.Data);
+                    }
+                    catch (Exception ex)
+                    {
+                        var normalizedSymbol = NormalizeFutures(data.Data.Symbol);
+                        var error = $"Will reconnect. Unhandled error while receiving futures depth for {normalizedSymbol}.";
+                        LogException(ex, error);
+                        Task.Run(async () => await HandleConnectionLost(error, ex));
+                    }
+                },
+                CancellationToken.None);
+            if (futuresDeltaSubscription.Success)
+                AttachEventHandlers(futuresDeltaSubscription.Data);
+            else
+                throw new Exception($"Unsuccessful futures deltas subscription error: {futuresDeltaSubscription.Error}");
+        }
         private async Task InitializeDeltasAsync()
         {
+            if (GetAllNonNormalizedSymbols().Count == 0)
+                return;
             // *************** PARTIAL OR NOT???????
             // Subscribe to updates of a symbol
             //_socketClient.SpotApi.ExchangeData.SubscribeToOrderBookUpdatesAsync
@@ -346,6 +488,31 @@ namespace MarketConnectors.Binance
                 }
             }
             _eventBuffers.ResumeConsumer();
+
+            if (_futuresRestClient == null)
+            {
+                _futuresEventBuffers?.ResumeConsumer();
+                return;
+            }
+
+            var futuresDepth = BinanceFuturesFeed.DepthLimit(_settings.DepthLevels);
+            foreach (var symbol in _futuresNormalized.Keys)
+            {
+                var normalizedSymbol = NormalizeFutures(symbol);
+                _localOrderBooks.TryAdd(normalizedSymbol, null);
+                _futuresSynced.TryRemove(normalizedSymbol, out _);
+                log.Info($"{this.Name}: Getting USD-M futures snapshot {normalizedSymbol} level 2");
+                var depthSnapshot = await _futuresRestClient.UsdFuturesApi.ExchangeData.GetOrderBookAsync(symbol, futuresDepth);
+                if (depthSnapshot.Success)
+                {
+                    var futuresBook = ToOrderBookModel(depthSnapshot.Data, normalizedSymbol);
+                    _localOrderBooks[normalizedSymbol] = futuresBook;
+                    RaiseOnDataReceived(futuresBook);
+                }
+                else
+                    throw new Exception($"Unsuccessful futures snapshot request for {normalizedSymbol} error: {depthSnapshot.ResponseStatusCode} - {depthSnapshot.Error}");
+            }
+            _futuresEventBuffers.ResumeConsumer();
         }
         private async Task InitializeUserPrivateOrders()
         {
@@ -569,6 +736,23 @@ namespace MarketConnectors.Binance
             UpdateOrderBook(eventData, symbol);
 
         }
+        private void futuresBuffers_onReadAction(IBinanceFuturesEventOrderBook eventData)
+        {
+            var symbol = NormalizeFutures(eventData.Symbol);
+            if (!_localOrderBooks.TryGetValue(symbol, out var book) || book == null)
+                return;
+
+            var synced = _futuresSynced.ContainsKey(symbol);
+            var firstUpdateId = eventData.FirstUpdateId ?? long.MaxValue;
+            var step = BinanceFuturesFeed.Decide(book.Sequence, firstUpdateId, eventData.LastUpdateId, eventData.LastUpdateIdStream, synced);
+            if (step == BinanceFuturesFeed.BookStep.Drop)
+                return;
+            if (step == BinanceFuturesFeed.BookStep.Gap)
+                throw new Exception("Detected sequence gap.");
+
+            ApplyBookDelta(eventData, symbol, book);
+            _futuresSynced.TryAdd(symbol, 0);
+        }
         private void eventBuffers_onErrorAction(Exception ex)
         {
             var _error = $"Will reconnect. Unhandled error in the Market Data Queue: {ex.Message}";
@@ -579,22 +763,25 @@ namespace MarketConnectors.Binance
 
         internal void tradesBuffers_onReadAction(IBinanceTrade eventData)
         {
-            var _symbol = GetNormalizedSymbol(eventData.Symbol);
-            // Get a Trade object from the pool.
+            PublishTrade(GetNormalizedSymbol(eventData.Symbol), eventData.Price, eventData.Quantity, eventData.TradeTime, eventData.BuyerIsMaker);
+        }
+        private void futuresTrades_onReadAction(BinanceStreamAggregatedTrade eventData)
+        {
+            PublishTrade(NormalizeFutures(eventData.Symbol), eventData.Price, eventData.Quantity, eventData.TradeTime, eventData.BuyerIsMaker);
+        }
+        private void PublishTrade(string symbol, decimal price, decimal quantity, DateTime tradeTime, bool buyerIsMaker)
+        {
             var trade = tradePool.Get();
-            // Populate the Trade object with the necessary data.
-            trade.Price = eventData.Price;
-            trade.Size = eventData.Quantity;
-            trade.Symbol = _symbol;
-            trade.Timestamp = eventData.TradeTime.ToLocalTime();
+            trade.Price = price;
+            trade.Size = quantity;
+            trade.Symbol = symbol;
+            trade.Timestamp = tradeTime.ToLocalTime();
             trade.ProviderId = _settings.Provider.ProviderID;
             trade.ProviderName = _settings.Provider.ProviderName;
-            // IsBuy means the AGGRESSOR bought. The stream reports the opposite fact: BuyerIsMaker is
-            // the "m" flag, true when the buyer was the resting maker - which makes the seller the
-            // aggressor. Negate it, or every aggressive sell on this venue is reported as a buy and
-            // every study that reads trade side reads this venue backwards.
-            trade.IsBuy = !eventData.BuyerIsMaker;
-            trade.MarketMidPrice = _localOrderBooks[_symbol].MidPrice;
+            trade.IsBuy = !buyerIsMaker;
+            trade.MarketMidPrice = _localOrderBooks.TryGetValue(symbol, out var book) && book != null
+                ? book.MidPrice
+                : 0;
 
             RaiseOnDataReceived(trade);
             tradePool.Return(trade);
@@ -694,8 +881,6 @@ namespace MarketConnectors.Binance
                 return;
             }
 
-            DateTime? exchangeTs = ResolveBookTimestamp(lob_update);
-
             if (lob_update.LastUpdateId <= local_lob.Sequence)
                 return;
 
@@ -703,6 +888,12 @@ namespace MarketConnectors.Binance
                 lob_update.FirstUpdateId != local_lob.Sequence + 1)
                 throw new Exception("Detected sequence gap.");
 
+            ApplyBookDelta(lob_update, normalizedSymbol, local_lob);
+        }
+
+        private void ApplyBookDelta(IBinanceEventOrderBook lob_update, string normalizedSymbol, VisualHFT.Model.OrderBook local_lob)
+        {
+            DateTime? exchangeTs = ResolveBookTimestamp(lob_update);
             // ✅ Cache DateTime.Now once
             var now = DateTime.Now;
             DateTime ts = exchangeTs ?? now;
@@ -775,27 +966,30 @@ namespace MarketConnectors.Binance
                 if (Status == ePluginStatus.STOPPED || Status == ePluginStatus.STOPPING || Status == ePluginStatus.STOPPED_FAILED)
                     return;
 
-                bool isConnected = _socketClient.CurrentConnections > 0;
-                if (!isConnected)
+                bool spotExpected = GetAllNonNormalizedSymbols().Count > 0;
+                bool futuresExpected = _futuresSocketClient != null;
+                bool spotUp = !spotExpected || (_socketClient != null && _socketClient.CurrentConnections > 0);
+                bool futuresUp = !futuresExpected || _futuresSocketClient.CurrentConnections > 0;
+                if (!spotUp || !futuresUp)
                 {
                     throw new Exception("The socket seems to be disconnected.");
                 }
 
-                DateTime ini = DateTime.Now;
-                var result = await _restClient.SpotApi.ExchangeData.PingAsync();
-                if (result != null)
+                if (spotExpected)
                 {
-                    var timeLapseInMicroseconds = DateTime.Now.Subtract(ini).TotalMicroseconds;
-
-                    // ✅ FIX: Use Interlocked for thread safety
-                    Interlocked.Exchange(ref pingFailedAttempts, 0);
-
-                    RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
+                    var result = await _restClient.SpotApi.ExchangeData.PingAsync();
+                    if (result == null)
+                        throw new Exception("Ping failed, result was null.");
                 }
-                else
+                if (futuresExpected)
                 {
-                    throw new Exception("Ping failed, result was null.");
+                    var futuresPing = await _futuresRestClient.UsdFuturesApi.ExchangeData.PingAsync();
+                    if (futuresPing == null)
+                        throw new Exception("Futures ping failed, result was null.");
                 }
+
+                Interlocked.Exchange(ref pingFailedAttempts, 0);
+                RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTED));
             }
             catch (Exception ex)
             {
@@ -810,11 +1004,16 @@ namespace MarketConnectors.Binance
             }
         }
 
-        private VisualHFT.Model.OrderBook ToOrderBookModel(BinanceOrderBook data)
+        private VisualHFT.Model.OrderBook ToOrderBookModel(BinanceOrderBook data, string normalizedSymbol = null)
         {
             var identifiedPriceDecimalPlaces = RecognizeDecimalPlacesAutomatically(data.Asks.Select(x => x.Price));
 
-            var lob = new VisualHFT.Model.OrderBook(GetNormalizedSymbol(data.Symbol), identifiedPriceDecimalPlaces, _settings.DepthLevels);
+            // USD-M depth snapshots hide Symbol on the derived book. Reading it through
+            // the spot base type returns blank, and a blank book never reaches the symbol list.
+            var symbol = !string.IsNullOrEmpty(normalizedSymbol)
+                ? normalizedSymbol
+                : GetNormalizedSymbol(data.Symbol);
+            var lob = new VisualHFT.Model.OrderBook(symbol, identifiedPriceDecimalPlaces, _settings.DepthLevels);
             lob.ProviderID = _settings.Provider.ProviderID;
             lob.ProviderName = _settings.Provider.ProviderName;
             lob.SizeDecimalPlaces = RecognizeDecimalPlacesAutomatically(data.Asks.Select(x => x.Quantity));
@@ -870,9 +1069,14 @@ namespace MarketConnectors.Binance
                 {
                     UnattachEventHandlers(deltaSubscription?.Data);
                     UnattachEventHandlers(tradesSubscription?.Data);
+                    UnattachEventHandlers(futuresDeltaSubscription?.Data);
+                    UnattachEventHandlers(futuresTradesSubscription?.Data);
                     _socketClient?.UnsubscribeAllAsync();
                     _socketClient?.Dispose();
                     _restClient?.Dispose();
+                    _futuresSocketClient?.UnsubscribeAllAsync();
+                    _futuresSocketClient?.Dispose();
+                    _futuresRestClient?.Dispose();
                     _timerPing?.Dispose();
 
                     // ✅ FIX: Dispose semaphore
@@ -880,6 +1084,8 @@ namespace MarketConnectors.Binance
 
                     _eventBuffers?.Dispose();
                     _tradesBuffers?.Dispose();
+                    _futuresEventBuffers?.Dispose();
+                    _futuresTradesBuffers?.Dispose();
 
                     if (_localOrderBooks != null)
                     {
@@ -906,7 +1112,33 @@ namespace MarketConnectors.Binance
             {
                 _settings.Provider = new VisualHFT.Model.Provider() { ProviderID = 1, ProviderName = "Binance" };
             }
-            ParseSymbols(string.Join(',', _settings.Symbols.ToArray())); //Utilize normalization function
+            _settings.Symbols ??= new List<string>();
+            _settings.FuturesSymbols ??= new List<string>();
+            LoadSymbolMaps();
+        }
+        private void LoadSymbolMaps()
+        {
+            _settings.Symbols ??= new List<string>();
+            _settings.FuturesSymbols ??= new List<string>();
+            ParseSymbols(string.Join(',', _settings.Symbols));
+            var spotRaw = new HashSet<string>(GetAllNonNormalizedSymbols());
+            var spotNormalized = new HashSet<string>(GetAllNormalizedSymbols());
+            _futuresNormalized = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in BinanceFuturesFeed.Parse(_settings.FuturesSymbols))
+            {
+                if (spotRaw.Contains(pair.Key) || spotNormalized.Contains(pair.Value))
+                {
+                    log.Warn($"{this.Name}: futures symbol {pair.Key}({pair.Value}) overlaps a spot symbol and was skipped.");
+                    continue;
+                }
+                _futuresNormalized[pair.Key] = pair.Value;
+            }
+        }
+        private string NormalizeFutures(string raw)
+        {
+            if (!string.IsNullOrEmpty(raw) && _futuresNormalized.TryGetValue(raw, out var normalized))
+                return normalized;
+            return raw ?? string.Empty;
         }
         protected override void SaveSettings()
         {
@@ -923,12 +1155,16 @@ namespace MarketConnectors.Binance
                 UpdateIntervalMs = 100,
                 IsNonUS = false,
                 Provider = new VisualHFT.Model.Provider() { ProviderID = 1, ProviderName = "Binance" },
-                Symbols = new List<string>() { "BTCUSDT(BTC/USD)", "ETHUSDT(ETH/USD)" } // Add more symbols as needed
+                Symbols = new List<string>() { "BTCUSDT(BTC/USD)", "ETHUSDT(ETH/USD)" },
+                FuturesSymbols = new List<string>()
             };
             SaveToUserSettings(_settings);
         }
         public override object GetUISettings()
         {
+#if !WINDOWS
+            return null;
+#else
             PluginSettingsView view = new PluginSettingsView();
             PluginSettingsViewModel viewModel = new PluginSettingsViewModel(CloseSettingWindow);
             viewModel.ApiSecret = _settings.ApiSecret;
@@ -938,6 +1174,7 @@ namespace MarketConnectors.Binance
             viewModel.ProviderId = _settings.Provider.ProviderID;
             viewModel.ProviderName = _settings.Provider.ProviderName;
             viewModel.Symbols = _settings.Symbols;
+            viewModel.FuturesSymbols = _settings.FuturesSymbols ?? new List<string>();
             viewModel.IsNonUS = _settings.IsNonUS;
             viewModel.UpdateSettingsFromUI = () =>
             {
@@ -947,9 +1184,10 @@ namespace MarketConnectors.Binance
                 _settings.DepthLevels = viewModel.DepthLevels;
                 _settings.Provider = new VisualHFT.Model.Provider() { ProviderID = viewModel.ProviderId, ProviderName = viewModel.ProviderName };
                 _settings.Symbols = viewModel.Symbols;
+                _settings.FuturesSymbols = viewModel.FuturesSymbols ?? new List<string>();
                 _settings.IsNonUS = viewModel.IsNonUS;
                 SaveSettings();
-                ParseSymbols(string.Join(',', _settings.Symbols.ToArray()));
+                LoadSymbolMaps();
 
                 //run this because it will allow to reconnect with the new values
                 RaiseOnDataReceived(GetProviderModel(eSESSIONSTATUS.CONNECTING));
@@ -960,6 +1198,7 @@ namespace MarketConnectors.Binance
             // Display the view, perhaps in a dialog or a new window.
             view.DataContext = viewModel;
             return view;
+#endif
         }
 
 

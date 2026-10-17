@@ -8,8 +8,12 @@ using VisualHFT.Helpers;
 using VisualHFT.Model;
 using VisualHFT.PluginManager;
 using VisualHFT.Studies.VPIN.Model;
+#if WINDOWS
 using VisualHFT.Studies.VPIN.UserControls;
+#endif
+#if WINDOWS
 using VisualHFT.Studies.VPIN.ViewModel;
+#endif
 using VisualHFT.UserSettings;
 
 namespace VisualHFT.Studies
@@ -69,6 +73,24 @@ namespace VisualHFT.Studies
         // corrected form is selected but cannot be armed - see ResetBucket.
         private VpinBucketEngine? _engine;
         private bool _floorWarningLogged;
+        private VpinVolumeFloor _volumeFloor = new();
+        private readonly List<PendingPrint> _pendingPrints = new();
+        private string _armedSymbol = "";
+        private int _armedProviderId;
+        private bool _bucketArmed;
+
+        private readonly struct PendingPrint
+        {
+            public PendingPrint(decimal price, decimal size, bool isBuy)
+            {
+                Price = price;
+                Size = size;
+                IsBuy = isBuy;
+            }
+            public decimal Price { get; }
+            public decimal Size { get; }
+            public bool IsBuy { get; }
+        }
 
 
         // Event declaration
@@ -155,65 +177,143 @@ namespace VisualHFT.Studies
 
             lock (_lockBucket)
             {
+                RetargetIfNeeded(e.Symbol, e.ProviderId);
+
+                decimal size = e.Size;
+                if (size <= 0m)
+                    return;
+
+                if (!_bucketArmed)
+                {
+                    _volumeFloor.Add(size);
+                    if (!_volumeFloor.IsReady)
+                    {
+                        if (TryClassifyLegacy(e, out var pendingSide))
+                            _pendingPrints.Add(new PendingPrint(e.Price, size, pendingSide));
+                        else
+                            _pendingPrints.Add(new PendingPrint(e.Price, size, e.IsBuy == true));
+                        return;
+                    }
+
+                    ArmBucketVolume();
+                    foreach (var print in _pendingPrints)
+                        ApplyPrint(print.Price, print.Size, print.IsBuy);
+                    _pendingPrints.Clear();
+                }
+
                 if (_useCorrectedForm)
                 {
-                    // Null engine means the corrected form is selected but could not be armed. Publish
-                    // nothing at all rather than quietly running the other form's arithmetic.
                     if (_engine != null)
                         ProcessTradeCorrected(e);
                     return;
                 }
 
-                if (_bucketVolumeSize == 0)
-                    _bucketVolumeSize = (decimal)_settings.BucketVolSize;
-
-                // Quote rule: classify using mid-price from the order book
-                // Price >= mid → buy (aggressor lifting the ask)
-                // Price <  mid → sell (aggressor hitting the bid)
-                // Fallback to provider's IsBuy if no mid-price yet
-                bool isBuy;
-                if (_lastMarketMidPrice > 0)
-                    isBuy = e.Price >= _lastMarketMidPrice;
-                else if (e.IsBuy.HasValue)
-                    isBuy = e.IsBuy.Value;
-                else
-                    return; // No classification possible
-
-                decimal remainingSize = e.Size;
-
-                // Assign entire trade to buy or sell for the current bucket portion
-                if (isBuy)
-                    _currentBuyVolume += remainingSize;
-                else
-                    _currentSellVolume += remainingSize;
-                _currentBucketVolume += remainingSize;
-
-                // Complete as many buckets as this trade fills
-                while (_currentBucketVolume >= _bucketVolumeSize && _bucketVolumeSize > 0)
-                {
-                    decimal bucketOverflow = _currentBucketVolume - _bucketVolumeSize;
-
-                    // Trim the overflow from whichever side received it
-                    if (isBuy)
-                        _currentBuyVolume -= bucketOverflow;
-                    else
-                        _currentSellVolume -= bucketOverflow;
-                    _currentBucketVolume = _bucketVolumeSize;
-
-                    DoCalculation(true); // Bucket completed
-
-                    // Start new bucket with the overflow
-                    _currentBuyVolume = 0;
-                    _currentSellVolume = 0;
-                    if (isBuy)
-                        _currentBuyVolume = bucketOverflow;
-                    else
-                        _currentSellVolume = bucketOverflow;
-                    _currentBucketVolume = bucketOverflow;
-                }
-
-                DoCalculation(false); // Interim update with current state
+                if (!TryClassifyLegacy(e, out var isBuy))
+                    return;
+                ApplyPrint(e.Price, size, isBuy);
             }
+        }
+
+        private bool TryClassifyLegacy(Trade e, out bool isBuy)
+        {
+            if (_lastMarketMidPrice > 0)
+            {
+                isBuy = e.Price >= _lastMarketMidPrice;
+                return true;
+            }
+            if (e.IsBuy.HasValue)
+            {
+                isBuy = e.IsBuy.Value;
+                return true;
+            }
+            isBuy = false;
+            return false;
+        }
+
+        private void ApplyPrint(decimal price, decimal size, bool isBuy)
+        {
+            if (_useCorrectedForm)
+            {
+                if (_engine == null)
+                    return;
+                _engine.AddTrade(price, size);
+                if (_engine.BucketJustClosed)
+                    PublishCorrected();
+                return;
+            }
+
+            if (_bucketVolumeSize <= 0)
+                return;
+
+            if (isBuy)
+                _currentBuyVolume += size;
+            else
+                _currentSellVolume += size;
+            _currentBucketVolume += size;
+
+            while (_currentBucketVolume >= _bucketVolumeSize)
+            {
+                decimal overflow = _currentBucketVolume - _bucketVolumeSize;
+                if (isBuy)
+                    _currentBuyVolume -= overflow;
+                else
+                    _currentSellVolume -= overflow;
+                _currentBucketVolume = _bucketVolumeSize;
+                DoCalculation(true);
+
+                _currentBuyVolume = isBuy ? overflow : 0;
+                _currentSellVolume = isBuy ? 0 : overflow;
+                _currentBucketVolume = overflow;
+            }
+
+            DoCalculation(false);
+        }
+
+        private void RetargetIfNeeded(string symbol, int providerId)
+        {
+            if (_armedSymbol == symbol && _armedProviderId == providerId)
+                return;
+            _armedSymbol = symbol ?? "";
+            _armedProviderId = providerId;
+            ResetBucketUnlocked();
+        }
+
+        private void ArmBucketVolume()
+        {
+            var configured = (decimal)(_settings?.BucketVolSize ?? 0);
+            _bucketVolumeSize = _volumeFloor.Recommend(configured);
+            _bucketArmed = _bucketVolumeSize > 0;
+            if (!_bucketArmed)
+                return;
+
+            if (_volumeFloor.Recommend(configured) > configured && configured > 0)
+            {
+                log.Info(
+                    $"{this.Name}: bucket volume {configured} is too small for {_settings.Symbol} " +
+                    $"(median print {_volumeFloor.MedianPrint}). Using {_bucketVolumeSize} so a bucket holds " +
+                    $"{VpinVolumeFloor.PrintsPerBucket} prints.");
+            }
+
+            if (_useCorrectedForm)
+                _engine = new VpinBucketEngine(_bucketVolumeSize, _bucketImbalances.Length, minimumPrintsPerBucket: 0);
+        }
+
+        private void PublishCorrected()
+        {
+            if (_engine == null || !_engine.HasPublishableValue)
+            {
+                WarnIfBucketSizeBelowFloor();
+                return;
+            }
+
+            var newItem = new BaseStudyModel();
+            newItem.Value = _engine.Value;
+            newItem.Format = ValueFormat;
+            newItem.Timestamp = HelperTimeProvider.Now;
+            newItem.MarketMidPrice = _lastMarketMidPrice;
+            newItem.ValueColor = colorGreen;
+            newItem.AddItemSkippingAggregation = true;
+            AddCalculation(newItem);
         }
         private void LIMITORDERBOOK_OnDataReceived(OrderBook e)
         {
@@ -233,6 +333,7 @@ namespace VisualHFT.Studies
 
             lock (_lockBucket)
             {
+                RetargetIfNeeded(e.Symbol, e.ProviderID);
                 _lastMarketMidPrice = (decimal)e.MidPrice;
 
                 // Corrected form: the book is read for the displayed mid price only. It never feeds
@@ -341,36 +442,29 @@ namespace VisualHFT.Studies
         private void ResetBucket()
         {
             lock (_lockBucket)
-            {
-                _bucketVolumeSize = 0;
-                _currentSellVolume = 0;
-                _currentBuyVolume = 0;
-                _currentBucketVolume = 0;
+                ResetBucketUnlocked();
+        }
 
-                int n = _settings?.NumberOfBuckets ?? DEFAULT_NUMBER_OF_BUCKETS;
-                if (n <= 0) n = DEFAULT_NUMBER_OF_BUCKETS;
-                _bucketImbalances = new decimal[n];
-                _bufferIndex = 0;
-                _bufferCount = 0;
-                _rollingSum = 0;
+        private void ResetBucketUnlocked()
+        {
+            _bucketVolumeSize = 0;
+            _currentSellVolume = 0;
+            _currentBuyVolume = 0;
+            _currentBucketVolume = 0;
+            _bucketArmed = false;
+            _volumeFloor = new VpinVolumeFloor();
+            _pendingPrints.Clear();
 
-                // A form switch or a bucket-size change restarts the calculation from nothing:
-                // buckets collected under one classification rule or one bucket volume say nothing
-                // about the other, so carrying them across would blend two different measurements.
-                _floorWarningLogged = false;
-                _engine = null;
-                _useCorrectedForm = _settings?.UseCorrectedForm == true;
-                if (_useCorrectedForm)
-                {
-                    // The dialog rejects a non-positive bucket volume, but a settings file edited by
-                    // hand or written by an older build does not go through the dialog.
-                    if (_settings!.BucketVolSize > 0)
-                        _engine = new VpinBucketEngine((decimal)_settings.BucketVolSize, n);
-                    else
-                        log.Warn($"{this.Name}: the corrected form is selected but the bucket volume size is {_settings.BucketVolSize}. " +
-                                 "It must be greater than zero. No value will be published until it is set.");
-                }
-            }
+            int n = _settings?.NumberOfBuckets ?? DEFAULT_NUMBER_OF_BUCKETS;
+            if (n <= 0) n = DEFAULT_NUMBER_OF_BUCKETS;
+            _bucketImbalances = new decimal[n];
+            _bufferIndex = 0;
+            _bufferCount = 0;
+            _rollingSum = 0;
+
+            _floorWarningLogged = false;
+            _engine = null;
+            _useCorrectedForm = _settings?.UseCorrectedForm == true;
         }
         /// <summary>
         /// This method defines how the internal AggregatedCollection should aggregate incoming items.
@@ -439,13 +533,16 @@ namespace VisualHFT.Studies
                 BucketVolSize = 1,
                 NumberOfBuckets = DEFAULT_NUMBER_OF_BUCKETS,
                 Symbol = "",
-                Provider = new ViewModel.Model.Provider(),
+                Provider = new VisualHFT.Model.Provider(),
                 AggregationLevel = AggregationLevel.S1
             };
             SaveToUserSettings(_settings);
         }
         public override object GetUISettings()
         {
+#if !WINDOWS
+            return null;
+#else
             PluginSettingsView view = new PluginSettingsView();
             PluginSettingsViewModel viewModel = new PluginSettingsViewModel(CloseSettingWindow);
             viewModel.BucketVolumeSize = _settings.BucketVolSize;
@@ -475,6 +572,7 @@ namespace VisualHFT.Studies
             // Display the view, perhaps in a dialog or a new window.
             view.DataContext = viewModel;
             return view;
+#endif
         }
 
     }

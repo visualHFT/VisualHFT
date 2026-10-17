@@ -9,8 +9,12 @@ using Kraken.Net.Interfaces.Clients;
 using Kraken.Net.Objects.Models;
 using Kraken.Net.Objects.Models.Socket;
 using MarketConnectors.Kraken.Model;
+#if WINDOWS
 using MarketConnectors.Kraken.UserControls;
+#endif
+#if WINDOWS
 using MarketConnectors.Kraken.ViewModel;
+#endif
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
@@ -1006,6 +1010,9 @@ namespace MarketConnectors.Kraken
         }
         public override object GetUISettings()
         {
+#if !WINDOWS
+            return null;
+#else
             PluginSettingsView view = new PluginSettingsView();
             PluginSettingsViewModel viewModel = new PluginSettingsViewModel(CloseSettingWindow);
             viewModel.ApiSecret = _settings.ApiSecret;
@@ -1037,6 +1044,7 @@ namespace MarketConnectors.Kraken
             // Display the view, perhaps in a dialog or a new window.
             view.DataContext = viewModel;
             return view;
+#endif
         }
 
 

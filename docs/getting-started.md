@@ -32,6 +32,19 @@ parent-folder/
 4. Press <kbd>F5</kbd>.
 5. In the Dashboard, select an available provider and a normalised symbol such as `BTC/USD`.
 
+## macOS
+
+The WPF host stays Windows-only. On macOS, the Avalonia host builds against the same `VisualHFT.Commons` contracts and the shared `VisualHFT.Runtime` plugin loader. It does not use the OxyPlot fork.
+
+- The [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
+
+```bash
+dotnet build VisualHFT.Mac.slnx
+dotnet run --project VisualHFT.Desktop/VisualHFT.Desktop.csproj
+```
+
+The process starts with no ticker selected. Choose an exchange and symbol. Book, tape, and study tiles follow that selection. Market-data callbacks only copy the fields they need; the window paints those copies on a timer.
+
 ## Next steps
 
 - Review the [architecture overview](architecture.md).

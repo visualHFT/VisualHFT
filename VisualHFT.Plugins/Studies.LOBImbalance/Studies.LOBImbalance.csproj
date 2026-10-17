@@ -1,14 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <TargetFramework Condition="!$([MSBuild]::IsOSPlatform('windows'))">net10.0</TargetFramework>
+    <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">net10.0;net10.0-windows10.0.17763.0</TargetFrameworks>
     <Nullable>enable</Nullable>
-    <UseWPF>true</UseWPF>
-    <SupportedOSPlatformVersion>8.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion Condition="$(TargetFramework.Contains('-windows'))">8.0</SupportedOSPlatformVersion>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\VisualHFT.Commons.WPF\VisualHFT.Commons.WPF.csproj" />
+    <ProjectReference Include="..\..\VisualHFT.Commons.WPF\VisualHFT.Commons.WPF.csproj" Condition="$(TargetFramework.Contains('-windows'))" />
     <ProjectReference Include="..\..\VisualHFT.Commons\VisualHFT.Commons.csproj" />
   </ItemGroup>
 
@@ -22,6 +22,18 @@
     <Page Update="UserControls\PluginSettingsView.xaml">
       <SubType>Designer</SubType>
     </Page>
+  </ItemGroup>
+
+
+  <PropertyGroup>
+    <UseWPF Condition="$(TargetFramework.Contains('-windows'))">true</UseWPF>
+    <DefineConstants Condition="$(TargetFramework.Contains('-windows'))">$(DefineConstants);WINDOWS</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="!$(TargetFramework.Contains('-windows'))">
+    <Compile Remove="UserControls\**\*.cs" />
+    <Compile Remove="ViewModels\**\*.cs" />
+    <Compile Remove="ViewModel\**\*.cs" />
+    <Page Remove="**\*.xaml" />
   </ItemGroup>
 
 </Project>

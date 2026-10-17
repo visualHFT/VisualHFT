@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.DirectoryServices.ActiveDirectory;
 using System.Threading.Tasks;
 using VisualHFT.Commons.PluginManager;
 using VisualHFT.Enums;
@@ -8,8 +7,12 @@ using VisualHFT.Helpers;
 using VisualHFT.Model;
 using VisualHFT.PluginManager;
 using VisualHFT.Studies.LOBImbalance.Model;
+#if WINDOWS
 using VisualHFT.Studies.LOBImbalance.UserControls;
+#endif
+#if WINDOWS
 using VisualHFT.Studies.LOBImbalance.ViewModel;
+#endif
 using VisualHFT.UserSettings;
 
 namespace VisualHFT.Studies
@@ -182,6 +185,9 @@ namespace VisualHFT.Studies
         }
         public override object GetUISettings()
         {
+#if !WINDOWS
+            return null;
+#else
             PluginSettingsView view = new PluginSettingsView();
             PluginSettingsViewModel viewModel = new PluginSettingsViewModel(CloseSettingWindow);
             viewModel.SelectedSymbol = _settings.Symbol;
@@ -204,6 +210,7 @@ namespace VisualHFT.Studies
             // Display the view, perhaps in a dialog or a new window.
             view.DataContext = viewModel;
             return view;
+#endif
         }
 
     }
