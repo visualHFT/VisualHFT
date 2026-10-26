@@ -72,15 +72,25 @@ namespace VisualHFT.Helpers
                     // continues to the next. Isolating must not mean hiding a data outage, so the
                     // fault is logged and published on OnException, carrying the subscriber that
                     // raised it so a listener can tell whose fault it was.
-                    Task.Run(() =>
-                    {
-                        log.Error(ex);
-                        OnException?.Invoke(new VisualHFT.Commons.Model.ErrorEventArgs(ex, subscriber.Target));
-                    });
+                    ReportSubscriberFault(ex, subscriber);
                     // deliberately NO rethrow — continue to the next subscriber.
                 }
             }
         }
+
+        // Kept out of the dispatch loop: a lambda inside the loop's catch block makes the compiler
+        // allocate its captured variables at the top of every loop pass, faulting or not (32 to 40
+        // bytes per subscriber per book update). Here they are allocated only when a subscriber
+        // throws. subscriber.Target is read inside the task, off the producer thread.
+        private void ReportSubscriberFault(Exception ex, Action<OrderBook> subscriber)
+        {
+            Task.Run(() =>
+            {
+                log.Error(ex);
+                OnException?.Invoke(new VisualHFT.Commons.Model.ErrorEventArgs(ex, subscriber.Target));
+            });
+        }
+
         public void UpdateData(OrderBook data)
         {
             DispatchToSubscribers(data);
