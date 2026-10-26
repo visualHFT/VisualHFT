@@ -165,10 +165,7 @@
                             </Grid>
                         </GroupBox>
                         <!--LOB IMBALANCE-->
-                        <Button Grid.Row="1" x:Name="butPopImbalances" ToolTip="Open this section into a new popup-Window" Click="butPopImbalances_Click" HorizontalAlignment="Right" VerticalAlignment="Top" Panel.ZIndex="999" Margin="0,0,0,0" Padding="0" Height="10" Width="10">
-                            <Image Source="/Images/pop-up.png" />
-                        </Button>
-                        <Grid Grid.Row="1" x:Name="GaugeGrid" Cursor="Hand" MouseLeftButtonDown="butPopImbalances_Click" ToolTip="Limit Order Book Imbalance&#x0a;This metric measures the difference between the number of buy and sell orders in the market.&#x0a;It can provide insights into the supply and demand dynamics in the market.&#x0a;&#x0a;A positive order imbalance (more buy orders than sell orders) can indicate upward pressure on prices, while a negative order imbalance (more sell orders than buy orders) can indicate downward pressure on prices.">
+                        <Grid Grid.Row="1" x:Name="GaugeGrid" ToolTip="Limit Order Book Imbalance&#x0a;This metric measures the difference between the number of buy and sell orders in the market.&#x0a;It can provide insights into the supply and demand dynamics in the market.&#x0a;&#x0a;A positive order imbalance (more buy orders than sell orders) can indicate upward pressure on prices, while a negative order imbalance (more sell orders than buy orders) can indicate downward pressure on prices.">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="2*" />
                                 <ColumnDefinition Width="6*" />

@@ -66,8 +66,8 @@ namespace VisualHFT.ViewModel
                 {
                     _realTimeData = new List<PlotInfoPriceChart>();
                 }
-                if (!_orderBook.LoadData(e.Asks, e.Bids))
-                    return; //if nothing to update, then exit
+                // e is the live book: read it, never load it into itself. LoadData clears the book
+                // before it reads the same lists, which leaves it empty or with levels at price 0.
 
                 #region REAL TIME DATA
                 if (_realTimeData != null && _orderBook != null)

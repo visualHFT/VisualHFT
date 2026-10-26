@@ -274,8 +274,7 @@ public class OrderBookDisposedGuardTests
             + "_data.Clear() (OrderBook.cs:325), which iterates the nulled _Asks at OrderBookData.cs:202. "
             + "This is the entry point a REST snapshot lands on during the reconnect that disposed the "
             + "book. It threw: " + Describe(thrown));
-        // LoadData reports whether it applied the snapshot; a torn-down book applied nothing, and the
-        // one caller that reads the flag (vmOrderBookFlowAnalysis) treats false as "nothing to update".
+        // LoadData reports whether it applied the snapshot; a torn-down book applied nothing.
         Assert.False(applied, "LoadData() on a torn-down book must report that nothing was applied.");
     }
 
