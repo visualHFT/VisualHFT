@@ -763,13 +763,7 @@ namespace VisualHFT.Model
                 _level.SizeDecimalPlaces = this.SizeDecimalPlaces;
                 list.Add(_level);
                 listCount++;
-                Interlocked.Increment(ref _addedLevels);
-                if (_level.Size.HasValue && _level.Size.Value > 0)
-                {
-                    var scaled = Scale(_level.Size.Value);
-                    if (scaled > 0)
-                        Interlocked.Add(ref _addedVolumeScaled, scaled);
-                }
+                bool newLevelCut = false;
 
                 //truncate last item if we exceeded the MaxDepth
                 if (listCount > MaxDepth)
@@ -781,11 +775,27 @@ namespace VisualHFT.Model
                     for (int i = listCount - 1; i >= startIndex; i--)
                     {
                         var itemToReturn = list[i];
+                        // decided before the level goes back to the pool, which resets it
+                        if (MaxDepth > 0 && ReferenceEquals(itemToReturn, _level))
+                            newLevelCut = true;
                         BookItemPool.Return(itemToReturn);
                     }
 
                     // Truncate in one operation
                     list.TruncateItemsAfterPosition(MaxDepth - 1);
+                }
+
+                // Count only a level that stays in the book: a worse price added to a full side is cut at
+                // once and no reader ever sees it. (A book with MaxDepth 0 keeps counting every add.)
+                if (!newLevelCut)
+                {
+                    Interlocked.Increment(ref _addedLevels);
+                    if (Size.HasValue && Size.Value > 0)
+                    {
+                        var scaled = Scale(Size.Value);
+                        if (scaled > 0)
+                            Interlocked.Add(ref _addedVolumeScaled, scaled);
+                    }
                 }
             }
         }
