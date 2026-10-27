@@ -55,17 +55,6 @@ namespace VisualHFT.View
             newViewModel.SwitchView = 2;
         }
 
-        private void butPopImbalances_Click(object sender, RoutedEventArgs e)
-        {
-            var currentViewModel = (ViewModel.vmOrderBook)this.DataContext;
-            //create model
-            var newViewModel = new ViewModel.vmOrderBookFlowAnalysis(Helpers.HelperCommon.GLOBAL_DIALOGS);
-            newViewModel.SelectedSymbol = currentViewModel.SelectedSymbol;
-            newViewModel.SelectedLayer = currentViewModel.SelectedLayer;
-            newViewModel.SelectedProvider = currentViewModel.SelectedProvider;
-
-        }
-
 
     }
 }
