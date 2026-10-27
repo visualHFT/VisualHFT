@@ -172,7 +172,7 @@ namespace VisualHFT.Model
                     // Reuse existing pooled item if available, otherwise get new one
                     if (destination[i] == null)
                     {
-                        destination[i] = BookItemPool.Get();
+                        destination[i] = new BookItem();
                     }
 
                     // Optimized copy - only essential fields that vary per level
@@ -207,7 +207,7 @@ namespace VisualHFT.Model
                     // Reuse existing pooled item if available, otherwise get new one
                     if (destination[i] == null)
                     {
-                        destination[i] = BookItemPool.Get();
+                        destination[i] = new BookItem();
                     }
 
                     // Optimized copy - only essential fields that vary per level
