@@ -13,7 +13,7 @@ namespace VisualHFT.Commons.Model
     /// ARCHITECTURE:
     /// - Value type (struct) = zero heap allocations for snapshot container
     /// - Arrays are pooled via ArrayPool for minimal GC pressure
-    /// - BookItems are pooled via BookItemPool for reuse
+    /// - BookItems stay in the pooled arrays and are reused with them
     /// - Inline storage in collections = excellent cache locality
     /// 
     /// PERFORMANCE CHARACTERISTICS:
@@ -63,17 +63,16 @@ namespace VisualHFT.Commons.Model
             {
                 if (array == null) return;
                 
-                // Return BookItems to their pool first
+                // Reset the items and keep them in the array (the filled slots are a prefix): the next
+                // snapshot that rents it copies into them
                 for (int i = 0; i < array.Length; i++)
                 {
-                    if (array[i] != null)
-                    {
-                        BookItemPool.Return(array[i]);
-                        array[i] = null;
-                    }
+                    var item = array[i];
+                    if (item == null) break;
+                    item.Reset();
                 }
                 
-                // Return array to pool (clearArray: false since we already cleared above)
+                // clearArray: false keeps the items in the slots
                 _sharedPool.Return(array, clearArray: false);
             }
         }
