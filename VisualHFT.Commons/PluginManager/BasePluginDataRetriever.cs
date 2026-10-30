@@ -28,6 +28,13 @@ namespace VisualHFT.Commons.PluginManager
         // Changed from bool to int for atomic operations (0=false, 1=true)
         private int _isReconnectingFlag = 0;
 
+        // 1 once StopAsync ran from outside the reconnection loop (a user or host stop), 0 again on StartAsync. A
+        // connector that marks itself STOPPED on a socket drop does not go through StopAsync, so it still reconnects.
+        private int _stopRequested = 0;
+
+        // True while the reconnection loop runs its own StopAsync, which is not a stop request.
+        private volatile bool _engineStopping;
+
         protected static bool _ARE_ALL_DATA_RETRIEVERS_ENABLE = true;
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
@@ -69,9 +76,12 @@ namespace VisualHFT.Commons.PluginManager
             log.Info($"{this.Name} is starting.");
             _reconnectionAttempt = 0; // Reset on successful connection
             _pendingReconnectionRequests = 0;
+            Volatile.Write(ref _stopRequested, 0);
         }
         public virtual async Task StopAsync()
         {
+            if (!_engineStopping)
+                Volatile.Write(ref _stopRequested, 1);
             Status = ePluginStatus.STOPPED;
             log.Info($"{this.Name} has stopped.");
         }
@@ -311,8 +321,30 @@ namespace VisualHFT.Commons.PluginManager
                                     break;
                                 }
 
+                                // Stopped on purpose while the loop waited (or before it started): restarting it would
+                                // undo that stop a few seconds later. Announce the status it was left in and stop here.
+                                // Only while it is still stopped: a stop that lost a race to a start leaves the flag set
+                                // on a running connector, and that connector must still recover from a real drop.
+                                if (!forceStartRegardlessStatus && Volatile.Read(ref _stopRequested) == 1
+                                    && (Status == ePluginStatus.STOPPED || Status == ePluginStatus.STOPPING))
+                                {
+                                    log.Info($"{this.Name} Reconnection ended without retry: the plugin was stopped (Status = {Status}).");
+                                    RaiseOnDataReceived(GetProviderModel(Status.ToSessionStatus()));
+                                    _pendingReconnectionRequests = 0;
+                                    _reconnectionAttempt = 0;
+                                    break;
+                                }
+
                                 // Execute reconnection sequence
-                                await StopAsync();
+                                _engineStopping = true;
+                                try
+                                {
+                                    await StopAsync();
+                                }
+                                finally
+                                {
+                                    _engineStopping = false;
+                                }
 
                                 // Preserve reconnection state across StartAsync
                                 var _reconnect = _reconnectionAttempt;
@@ -325,7 +357,7 @@ namespace VisualHFT.Commons.PluginManager
                                 // catch block, and inside this loop that call is a no-op (the re-entry guard at the
                                 // top of this method already owns the reconnection flag), so StartAsync returns
                                 // normally either way. The status it leaves behind is the only reliable signal.
-                                // The rail shows the LAST provider status announced, so each exit below announces one --
+                                // The UI shows the LAST provider status announced, so each exit below announces one --
                                 // a silent give-up would keep Gemini's CONNECTED, raised right before it stamps STOPPED_FAILED.
                                 if (Status == ePluginStatus.STARTED)
                                 {
@@ -376,8 +408,8 @@ namespace VisualHFT.Commons.PluginManager
 
                                 // Anything else is NOT a failed attempt, so it is neither retried nor overwritten.
                                 // STOPPED/STOPPING mean somebody stopped the plugin on purpose while it was starting:
-                                // the provider rail calls the retriever's StopAsync() and force-sets STOPPED on a user
-                                // toggle-off. Retrying that fights the user for ~62s of backoff and ends in
+                                // a caller that stops the connector calls its StopAsync(), which sets STOPPED. Retrying
+                                // that fights the user for ~62s of backoff and ends in
                                 // STOPPED_FAILED, which the entry guard above then refuses to restart. Any other
                                 // status takes this same exit because it is not evidence of a failed start either:
                                 // without that evidence the loop neither retries it nor overwrites what it reports.
