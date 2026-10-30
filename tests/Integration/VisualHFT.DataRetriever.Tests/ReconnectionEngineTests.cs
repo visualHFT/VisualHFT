@@ -368,6 +368,102 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
         }
 
         /// <summary>
+        /// A connector the user stopped must stay stopped. The sequence on a real connector: the stop
+        /// closes the socket, the close is reported as a server close while the status still reads as
+        /// running, HandleConnectionLost starts a reconnection and waits out its backoff, and the stop then
+        /// lands (STOPPED). If the loop checked only STOPPED_FAILED after the backoff, it would run its own
+        /// StopAsync/StartAsync and revive the connector a few seconds after the user stopped it.
+        ///
+        /// Rule: a StopAsync from outside the engine during the backoff means stopped on purpose: exit
+        /// without a restart, announcing the status like the other non-success exits.
+        /// </summary>
+        [Fact]
+        public async Task Reconnect_StoppedFromOutsideDuringTheBackoff_DoesNotRestart()
+        {
+            var fake = new ReconnectEngineFake { Status = ePluginStatus.STARTED };
+            fake.DuringBackoff = () => fake.StopAsync();
+
+            var failedAttemptNotifications = await CaptureFailedAttemptNotificationsAsync(
+                fake.Name, () => fake.TriggerReconnect(force: false));
+
+            Assert.Equal(1, fake.BackoffDelayCallCount);
+            Assert.Equal(0, fake.StartAsyncCallCount);
+            Assert.Equal(ePluginStatus.STOPPED, fake.Status);
+            Assert.Equal(0, fake.ConnectedNotificationCount);
+            Assert.True(failedAttemptNotifications.Count == 0,
+                "a stop during the backoff is not a failed attempt: " + string.Join(" | ", failedAttemptNotifications));
+            Assert.Equal(eSESSIONSTATUS.DISCONNECTED, fake.ProviderStatuses.Last());
+
+            // The connector is stopped, not broken: the next start (and a later reconnection) works as before.
+            fake.DuringBackoff = null;
+            await fake.StartAsync();
+            Assert.Equal(ePluginStatus.STARTED, fake.Status);
+            fake.StartAsyncCallCount = 0;
+            await fake.TriggerReconnect(force: false);
+            Assert.Equal(1, fake.StartAsyncCallCount);
+            Assert.Equal(ePluginStatus.STARTED, fake.Status);
+        }
+
+        /// <summary>
+        /// A stop that lost a race to a start leaves the stop flag set on a running connector (the start
+        /// finished after the stop and stamped STARTED). The flag alone must not refuse the next genuine
+        /// drop: only a connector that is still stopped or stopping is left alone.
+        /// </summary>
+        [Fact]
+        public async Task Reconnect_StaleStopFlagOnARunningConnector_StillReconnects()
+        {
+            var fake = new ReconnectEngineFake { Status = ePluginStatus.STARTED };
+
+            // The user's stop runs, then the start it raced finishes and the connector is running again.
+            await fake.StopAsync();
+            fake.Status = ePluginStatus.STARTED;
+
+            await fake.TriggerReconnect(force: false);
+
+            Assert.Equal(1, fake.BackoffDelayCallCount);
+            Assert.Equal(1, fake.StartAsyncCallCount);
+            Assert.Equal(ePluginStatus.STARTED, fake.Status);
+            Assert.Equal(eSESSIONSTATUS.CONNECTED, fake.ProviderStatuses.Last());
+        }
+
+        /// <summary>
+        /// Guards the shape of the fix above. A connector may set STOPPED itself when its socket drops and
+        /// then call HandleConnectionLost (BitStampPlugin's DisconnectionHappened handler does), so the
+        /// status alone cannot mean "the user stopped it": that reconnection must still run.
+        /// </summary>
+        [Fact]
+        public async Task Reconnect_ConnectorThatMarksItselfStoppedOnASocketDrop_StillReconnects()
+        {
+            var fake = new ReconnectEngineFake { Status = ePluginStatus.STARTED };
+            fake.DuringBackoff = () =>
+            {
+                fake.Status = ePluginStatus.STOPPED;
+                return Task.CompletedTask;
+            };
+
+            await fake.TriggerReconnect(force: false);
+
+            Assert.Equal(1, fake.StartAsyncCallCount);
+            Assert.Equal(ePluginStatus.STARTED, fake.Status);
+        }
+
+        /// <summary>
+        /// A forced restart (the settings dialog's reload) still runs after an earlier user stop: force only
+        /// bypasses the "stopped" guards, as it does for STOPPED_FAILED.
+        /// </summary>
+        [Fact]
+        public async Task Reconnect_ForcedAfterAUserStop_StillRestarts()
+        {
+            var fake = new ReconnectEngineFake { Status = ePluginStatus.STARTED };
+            await fake.StopAsync();
+
+            await fake.TriggerReconnect(force: true);
+
+            Assert.Equal(1, fake.StartAsyncCallCount);
+            Assert.Equal(ePluginStatus.STARTED, fake.Status);
+        }
+
+        /// <summary>
         /// Captures the engine's failed-attempt notifications — "Reconnection failed. Attempt N of M",
         /// raised through LogException(..., NotifyToUI: true) at BasePluginDataRetriever.cs:426-427 —
         /// for the duration of one reconnection, so a test can prove an outcome was NOT counted as a
@@ -419,6 +515,9 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
             public int StartAsyncCallCount;
             public int BackoffDelayCallCount;
             public Func<Task> GateBeforeAction;
+
+            /// <summary>Runs inside the backoff wait, as anything else on the app's threads could (tests set it).</summary>
+            public Func<Task> DuringBackoff;
 
             /// <summary>How StartAsync ends once the per-attempt queue is exhausted.</summary>
             public StartOutcome DefaultStartOutcome { get; set; } = StartOutcome.Started;
@@ -478,7 +577,7 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
             protected override Task ReconnectBackoffDelayAsync(int milliseconds)
             {
                 Interlocked.Increment(ref BackoffDelayCallCount);
-                return Task.CompletedTask;
+                return DuringBackoff?.Invoke() ?? Task.CompletedTask;
             }
 
             /// <summary>
