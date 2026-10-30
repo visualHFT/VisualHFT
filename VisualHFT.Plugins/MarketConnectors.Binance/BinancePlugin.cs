@@ -224,6 +224,8 @@ namespace MarketConnectors.Binance
                 else
                     options.Environment = BinanceEnvironment.Us;
             });
+            // Ask the spot stream for microsecond event stamps (the venue default is milliseconds).
+            _socketClient.SpotApi.SocketFactory = new MicrosecondStampSocketFactory();
 
             _restClient = new BinanceRestClient(options =>
             {
