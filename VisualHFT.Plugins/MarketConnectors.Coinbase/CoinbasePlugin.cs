@@ -321,7 +321,7 @@ namespace MarketConnectors.Coinbase
                                 // A history id is recorded here, on receipt, because its trade is never published. A live
                                 // trade is queued unrecorded; tradesBuffers_onReadAction records its id when it publishes it.
                                 bool history = Interlocked.Exchange(ref seeded.Value, 1) == 0 && trade.UpdateType == SocketUpdateType.Snapshot;
-                                foreach (var item in trade.Data)
+                                foreach (var item in history ? trade.Data : OldestFirst(trade.Data))
                                 {
                                     if (history)
                                     {
@@ -329,7 +329,8 @@ namespace MarketConnectors.Coinbase
                                             tradeIds.TryRecord(historyId);
                                         continue;
                                     }
-                                    item.Timestamp = trade.ReceiveTime;
+                                    // Preserve the exchange's trade execution timestamp; do NOT overwrite it
+                                    // with the local socket ReceiveTime (every trade of a message would share one later stamp).
                                     _traderQueueRef.Add(
                                         new Tuple<string, CoinbaseTrade>(_normalizedSymbol, item));
                                 }
@@ -353,6 +354,32 @@ namespace MarketConnectors.Coinbase
                     throw new Exception(_error);
                 }
             }
+        }
+
+        // The venue lists a message's trades newest first; they are queued oldest first, by trade time, then numeric trade id.
+        // A small copy and sort per multi-trade message on the socket thread, the same order of cost as the per-trade Tuple.
+        private static CoinbaseTrade[] OldestFirst(CoinbaseTrade[] trades)
+        {
+            if (trades.Length < 2)
+                return trades;
+            var ordered = (CoinbaseTrade[])trades.Clone();
+            Array.Sort(ordered, CompareTradeTimeThenId);
+            return ordered;
+        }
+
+        // A trade id that does not parse sorts after the parsed ids that share its time.
+        private static int CompareTradeTimeThenId(CoinbaseTrade a, CoinbaseTrade b)
+        {
+            int byTime = a.Timestamp.CompareTo(b.Timestamp);
+            if (byTime != 0)
+                return byTime;
+            bool aParsed = long.TryParse(a.TradeId, NumberStyles.None, CultureInfo.InvariantCulture, out var aId);
+            bool bParsed = long.TryParse(b.TradeId, NumberStyles.None, CultureInfo.InvariantCulture, out var bId);
+            if (aParsed && bParsed)
+                return aId.CompareTo(bId);
+            if (aParsed != bParsed)
+                return aParsed ? -1 : 1;
+            return 0;
         }
 
         private async Task InitializeOpenOrders()
