@@ -71,9 +71,9 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
             StoppedFailed,
 
             /// <summary>
-            /// Somebody stopped the plugin while it was starting: Status = STOPPED. The provider rail
-            /// does exactly this on a user toggle-off — StopAsync() then a force-set of the status on a
-            /// plugin still in STARTING (vmProviderRail.cs:305-311).
+            /// Somebody stopped the plugin while it was starting: Status = STOPPED. The case covered: a
+            /// caller stops a plugin that is still STARTING by calling StopAsync() and then setting the
+            /// status to STOPPED.
             /// </summary>
             LeaveStopped
         }
@@ -277,18 +277,17 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
         }
 
         /// <summary>
-        /// DEFECT 1 — an external stop is retried as if it were a failed connection attempt.
-        /// Mid-reconnect the user flips the provider rail OFF: vmProviderRail.cs:305-311 calls the
-        /// retriever's StopAsync() directly and force-sets Status = STOPPED on a plugin that is still
-        /// STARTING. The retry loop's final else (BasePluginDataRetriever.cs:419-421) reads STOPPED as
-        /// "the attempt did not reach STARTED", throws, and retries to the cap — ~62s of real backoff
-        /// (2+4+8+16+32s), 6 ERROR notifications, and a plugin the USER stopped on purpose left in
-        /// STOPPED_FAILED, which the unforced entry guard (:303-316) then refuses to restart.
+        /// DEFECT 1 — an external stop must not be retried as if it were a failed connection attempt.
+        /// Mid-reconnect, a caller stops a plugin that is still STARTING: it calls the retriever's
+        /// StopAsync() and then sets Status = STOPPED. If the retry loop read STOPPED as "the attempt
+        /// did not reach STARTED", it would throw and retry to the cap: ~62s of real backoff
+        /// (2+4+8+16+32s), an ERROR notification per attempt, and a plugin stopped on purpose left in
+        /// STOPPED_FAILED, which the unforced entry guard then refuses to restart.
         ///
-        /// Target rule: after the retried StartAsync, only STARTING — the status base.StartAsync()
-        /// stamps at :67 and that a connector's own failure hand-off leaves behind — is a failed
-        /// attempt. STOPPED or STOPPING means somebody stopped the plugin: exit the loop, retry
-        /// nothing, mark nothing, notify nothing.
+        /// Rule: after the retried StartAsync, only STARTING (the status base.StartAsync() stamps, and
+        /// the one a connector's own failure hand-off leaves behind) is a failed attempt. STOPPED or
+        /// STOPPING means somebody stopped the plugin: exit the loop, retry nothing, mark nothing,
+        /// notify nothing.
         /// </summary>
         [Fact]
         public async Task Reconnect_WhenStartAsyncLeavesStopped_ExitsWithoutRetryingOrMarking()
@@ -635,9 +634,8 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
                         break;
 
                     case StartOutcome.LeaveStopped:
-                        // vmProviderRail.cs:309-310 verbatim: on a user toggle-off of a plugin that is
-                        // still STARTING, the rail calls the retriever's StopAsync() directly and then
-                        // force-sets the status. No further internal start work runs.
+                        // A caller stopping a plugin that is still STARTING: it calls the retriever's
+                        // StopAsync() and then sets the status. No further internal start work runs.
                         await StopAsync();
                         Status = ePluginStatus.STOPPED;
                         break;
