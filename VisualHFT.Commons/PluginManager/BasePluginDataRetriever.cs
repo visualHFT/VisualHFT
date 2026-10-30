@@ -357,7 +357,7 @@ namespace VisualHFT.Commons.PluginManager
                                 // catch block, and inside this loop that call is a no-op (the re-entry guard at the
                                 // top of this method already owns the reconnection flag), so StartAsync returns
                                 // normally either way. The status it leaves behind is the only reliable signal.
-                                // The rail shows the LAST provider status announced, so each exit below announces one --
+                                // The UI shows the LAST provider status announced, so each exit below announces one --
                                 // a silent give-up would keep Gemini's CONNECTED, raised right before it stamps STOPPED_FAILED.
                                 if (Status == ePluginStatus.STARTED)
                                 {
@@ -408,8 +408,8 @@ namespace VisualHFT.Commons.PluginManager
 
                                 // Anything else is NOT a failed attempt, so it is neither retried nor overwritten.
                                 // STOPPED/STOPPING mean somebody stopped the plugin on purpose while it was starting:
-                                // the provider rail calls the retriever's StopAsync() and force-sets STOPPED on a user
-                                // toggle-off. Retrying that fights the user for ~62s of backoff and ends in
+                                // a caller that stops the connector calls its StopAsync(), which sets STOPPED. Retrying
+                                // that fights the user for ~62s of backoff and ends in
                                 // STOPPED_FAILED, which the entry guard above then refuses to restart. Any other
                                 // status takes this same exit because it is not evidence of a failed start either:
                                 // without that evidence the loop neither retries it nor overwrites what it reports.

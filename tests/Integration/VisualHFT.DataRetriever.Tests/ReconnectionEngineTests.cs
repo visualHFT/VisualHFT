@@ -24,17 +24,17 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
     /// instantly — so the same engine is proven without network or multi-second waits.
     ///
     /// The second block of tests covers the engine's POST-START DECISION: what the retry loop must
-    /// conclude from the status a connector's StartAsync leaves behind. That is where the engine is
-    /// currently blind — a connector reports a failed start by handing off to HandleConnectionLost from
-    /// inside its own catch (CoinbasePlugin.cs:123-128), the hand-off is swallowed by the re-entry guard
-    /// (BasePluginDataRetriever.cs:293) because the engine's own loop already owns the flag, StartAsync
-    /// then returns normally with Status still STARTING, and the loop declares success and stamps
-    /// STARTED unconditionally (:397-401). A half-started plugin reads as green.
+    /// conclude from the status a connector's StartAsync leaves behind. A connector reports a failed
+    /// start by handing off to HandleConnectionLost from inside its own catch (CoinbasePlugin's
+    /// StartAsync does), the hand-off is swallowed by the re-entry guard at the top of
+    /// HandleConnectionLost because the engine's own loop already owns the flag, and StartAsync then
+    /// returns normally with Status still STARTING. The loop must read that as a failed attempt, never
+    /// stamp STARTED over it: a half-started plugin must not read as green.
     ///
-    /// The third block covers three defects in that post-start outcome rule, each named DEFECT 1/2/3 on
-    /// its test: an external stop (the user flipping the provider rail off) is retried as a failure, a
-    /// forced restart overrides the connector's own terminal STOPPED_FAILED verdict, and the engine runs
-    /// the connector's internal start TWICE per attempt (once itself, once inside StartAsync).
+    /// The third block covers three rules of that post-start outcome, each named DEFECT 1/2/3 on its
+    /// test: an external stop (a caller that stops the connector) is not retried as a failure, a forced
+    /// restart does not override the connector's own terminal STOPPED_FAILED verdict, and the engine runs
+    /// the connector's internal start ONCE per attempt (inside StartAsync, never itself as well).
     ///
     /// NOTE: this covers the engine ORCHESTRATION. The per-connector "reconnect re-seeds the book"
     /// assertion is covered separately (SimulateConnectionInterruption on each real connector), because
@@ -52,12 +52,12 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
         /// </summary>
         private enum StartOutcome
         {
-            /// <summary>Clean start: Status = STARTED (every healthy connector, e.g. CoinbasePlugin.cs:119).</summary>
+            /// <summary>Clean start: Status = STARTED (every healthy connector, e.g. at the end of CoinbasePlugin's StartAsync).</summary>
             Started,
 
             /// <summary>
             /// The venue work threw and the connector's own catch handed the failure to the engine
-            /// (CoinbasePlugin.cs:123-128). Status is left where base.StartAsync() put it: STARTING.
+            /// (CoinbasePlugin's StartAsync catch does this). Status is left where base.StartAsync() put it: STARTING.
             /// </summary>
             FailLikeRealConnector,
 
@@ -100,12 +100,9 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
             Assert.Equal(ePluginStatus.STOPPED_FAILED, fake.Status);
             // The engine must retry exactly up to the cap before giving up — no infinite loop, no early give-up.
             Assert.Equal(MaxReconnectionAttempts, fake.ReconnectActionCallCount);
-            // CHANGED (DEFECT 3): this used to assert StartAsyncCallCount == 0, which only held because the
-            // engine invoked the registered action ITSELF (BasePluginDataRetriever.cs:378-381) and the throw
-            // escaped before StartAsync was ever reached — i.e. the old assertion encoded the double-call
-            // design. With the fake faithful to real connectors (StartAsync awaits the internal start, as
-            // BinancePlugin.cs:89 does), one attempt is one StartAsync that fails from the inside, so both
-            // counts must equal the cap.
+            // DEFECT 3: the engine does not invoke the registered action itself. With the fake faithful to
+            // real connectors (StartAsync awaits the internal start, as BinancePlugin's StartAsync does), one
+            // attempt is one StartAsync that fails from the inside, so both counts must equal the cap.
             Assert.Equal(MaxReconnectionAttempts, fake.StartAsyncCallCount);
         }
 
@@ -117,8 +114,8 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
             var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
             // Hold the first reconnection in-flight so its dedup flag is set when the second call arrives.
-            // The gate lives in the reconnect action, which the faithful fake now reaches from INSIDE
-            // StartAsync; either way it fires while HandleConnectionLost owns the dedup flag (:293).
+            // The gate lives in the reconnect action, which the faithful fake reaches from INSIDE
+            // StartAsync, so it fires while HandleConnectionLost owns the dedup flag.
             fake.GateBeforeAction = async () =>
             {
                 actionEntered.TrySetResult();
@@ -143,7 +140,7 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
         /// <summary>
         /// THE ENGINE HOLE. A real connector signals a failed start by calling HandleConnectionLost from
         /// its own catch block; inside the engine's retry loop that call is a no-op (the re-entry guard at
-        /// BasePluginDataRetriever.cs:293 already owns the flag), so StartAsync returns normally with
+        /// the top of HandleConnectionLost already owns the flag), so StartAsync returns normally with
         /// Status = STARTING. That is a FAILED attempt: the loop must retry it, up to the cap, and end in
         /// STOPPED_FAILED — never stamp STARTED over a plugin that never started.
         /// </summary>
@@ -157,7 +154,7 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
             Assert.Equal(ePluginStatus.STOPPED_FAILED, fake.Status);
             Assert.Equal(MaxReconnectionAttempts, fake.StartAsyncCallCount);
             // One attempt runs the connector's internal start exactly once, so the two counts match
-            // (DEFECT 3: today the engine invokes the action itself as well, making this 2x StartAsync).
+            // (DEFECT 3: the engine does not invoke the action itself as well).
             Assert.Equal(MaxReconnectionAttempts, fake.ReconnectActionCallCount);
             // A plugin that never started must never have been announced as CONNECTED.
             Assert.Equal(0, fake.ConnectedNotificationCount);
@@ -180,7 +177,7 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
 
             Assert.Equal(ePluginStatus.STARTED, fake.Status);
             Assert.Equal(3, fake.StartAsyncCallCount);
-            // Same one-internal-start-per-attempt rule as above (DEFECT 3): today this is 6, not 3.
+            // Same one-internal-start-per-attempt rule as above (DEFECT 3): 3, not 6.
             Assert.Equal(3, fake.ReconnectActionCallCount);
             // CONNECTED is announced once — on the attempt that actually started, not on the failed ones.
             Assert.Equal(1, fake.ConnectedNotificationCount);
@@ -212,7 +209,7 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
         public async Task Reconnect_WhenStartAsyncReportsStoppedFailed_GivesUpWithoutForce()
         {
             var fake = new ReconnectEngineFake { DefaultStartOutcome = StartOutcome.StoppedFailed };
-            // The unforced entry guard (BasePluginDataRetriever.cs:303-316) skips reconnection outright
+            // The unforced entry guard in HandleConnectionLost skips reconnection outright
             // when Status is already STOPPED_FAILED/STOPPING, so start from a running plugin.
             fake.Status = ePluginStatus.STARTED;
 
@@ -226,10 +223,9 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
             Assert.Equal(0, fake.ConnectedNotificationCount);
             Assert.True(failedAttemptNotifications.Count == 0,
                 "an unforced STOPPED_FAILED result must exit the loop directly, not be counted as a failed attempt: " + string.Join(" | ", failedAttemptNotifications));
-            // The rail shows the LAST provider status announced. Giving up must announce the terminal
-            // failure, otherwise the tile keeps whatever the venue library announced last (Gemini's own
-            // reconnect handler announces CONNECTED right before stamping STOPPED_FAILED,
-            // GeminiPlugin.cs:202-208): a green tile on a dead feed.
+            // The UI shows the LAST provider status announced. Giving up must announce the terminal
+            // failure, otherwise the provider keeps whatever was announced last (a venue library can
+            // announce CONNECTED shortly before the connector gives up): a green status on a dead feed.
             Assert.Equal(eSESSIONSTATUS.DISCONNECTED_FAILED, fake.ProviderStatuses.Last());
         }
 
@@ -254,10 +250,9 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
         }
 
         /// <summary>
-        /// The retry loop's backoff must go through the ReconnectBackoffDelayAsync seam
-        /// (BasePluginDataRetriever.cs:279) that exists for exactly this purpose. It currently awaits
-        /// Task.Delay directly (:362), so the seam override is dead and a full-cap engine test sleeps for
-        /// ~62s of real wall clock (2+4+8+16+32s plus jitter).
+        /// The retry loop's backoff must go through the ReconnectBackoffDelayAsync seam that exists for
+        /// exactly this purpose. If the loop awaited Task.Delay directly, the seam override would be dead
+        /// and a full-cap engine test would sleep for ~62s of real wall clock (2+4+8+16+32s plus jitter).
         /// </summary>
         [Fact]
         public async Task Reconnect_BackoffGoesThroughTheOverridableSeam_OnEveryAttempt()
@@ -309,15 +304,14 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
         }
 
         /// <summary>
-        /// DEFECT 2 — a forced restart overrides the connector's own terminal verdict.
-        /// The STOPPED_FAILED exit at BasePluginDataRetriever.cs:413 is gated on
-        /// !forceStartRegardlessStatus, so with force:true a start that reported STOPPED_FAILED falls
-        /// through to the throw at :421 and is retried 5 times. Binance and Gemini set STOPPED_FAILED
-        /// deliberately and WITHOUT retry on a [CantConnectError] (BinancePlugin.cs:95-103,
-        /// GeminiPlugin.cs:95-97) — and every settings-dialog reload enters the engine with force:true.
+        /// DEFECT 2 — a forced restart must not override the connector's own terminal verdict.
+        /// If the post-start STOPPED_FAILED exit were gated on !forceStartRegardlessStatus, a forced
+        /// start that reported STOPPED_FAILED would fall through to the failure throw and be retried 5
+        /// times. Binance and Gemini set STOPPED_FAILED deliberately and WITHOUT retry on a
+        /// [CantConnectError], and every settings-dialog reload enters the engine with force:true.
         ///
-        /// Target rule: force only bypasses the ENTRY guard (:303-316), so a previously failed plugin
-        /// can be restarted at all. STOPPED_FAILED reported *by the start itself* is the connector
+        /// Rule: force only bypasses the ENTRY guard in HandleConnectionLost, so a previously failed
+        /// plugin can be restarted at all. STOPPED_FAILED reported *by the start itself* is the connector
         /// giving up: honour it immediately, forced or not.
         /// </summary>
         [Fact]
@@ -338,20 +332,16 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
         }
 
         /// <summary>
-        /// DEFECT 3 — the engine runs the connector's internal start TWICE per attempt.
-        /// The loop invokes the registered action itself (BasePluginDataRetriever.cs:378-381) and then
-        /// calls StartAsync() (:386) — and every connector registers its InternalStartAsync
-        /// (BinancePlugin.cs:72, BitfinexPlugin.cs:64, BitStampPlugin.cs:65, CoinbasePlugin.cs:76,
-        /// GeminiPlugin.cs:74, KrakenPlugin.cs:86, KuCoinPlugin.cs:89) and then awaits that same method
-        /// again from inside its own StartAsync (BinancePlugin.cs:89, BitfinexPlugin.cs:95,
-        /// CoinbasePlugin.cs:114, KrakenPlugin.cs:120, KuCoinPlugin.cs:144, BitStampPlugin.cs:79,
-        /// GeminiPlugin.cs:89). One reconnection attempt therefore fires two full subscribe bursts
-        /// milliseconds apart against the venue, and it is the SECOND one whose status decides the
-        /// attempt.
+        /// DEFECT 3 — the engine must not run the connector's internal start TWICE per attempt.
+        /// Every connector (Binance, Bitfinex, BitStamp, Coinbase, Gemini, Kraken, KuCoin) registers its
+        /// internal start with SetReconnectionAction and also awaits that same method from inside its
+        /// own StartAsync. If the loop invoked the registered action itself and then called StartAsync(),
+        /// one reconnection attempt would fire two full subscribe bursts milliseconds apart against the
+        /// venue, and the SECOND one's status would decide the attempt.
         ///
-        /// Target rule: one attempt = one StartAsync() call. SetReconnectionAction (:268) stays as a
-        /// registration API, but the engine no longer invokes the action itself — the connector's own
-        /// start is what performs the internal start.
+        /// Rule: one attempt = one StartAsync() call. SetReconnectionAction stays as a registration API,
+        /// but the engine does not invoke the action itself — the connector's own start is what performs
+        /// the internal start.
         /// </summary>
         [Fact]
         public async Task Reconnect_RunsTheConnectorStartOncePerAttempt_NeverTheActionSeparately()
@@ -362,7 +352,7 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
 
             Assert.Equal(ePluginStatus.STARTED, fake.Status);
             Assert.Equal(1, fake.StartAsyncCallCount);
-            // Today this is 2: the engine's own invoke plus the one inside StartAsync.
+            // One: the engine does not invoke the action on top of the one inside StartAsync.
             Assert.Equal(1, fake.ReconnectActionCallCount);
         }
 
@@ -464,10 +454,10 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
 
         /// <summary>
         /// Captures the engine's failed-attempt notifications — "Reconnection failed. Attempt N of M",
-        /// raised through LogException(..., NotifyToUI: true) at BasePluginDataRetriever.cs:426-427 —
+        /// raised through LogException(..., NotifyToUI: true) in the retry loop's catch —
         /// for the duration of one reconnection, so a test can prove an outcome was NOT counted as a
-        /// failed attempt. HelperNotificationManager raises NotificationAdded synchronously
-        /// (HelperNotificationManager.cs:72,175), so everything the run notified is captured by the
+        /// failed attempt. HelperNotificationManager raises NotificationAdded synchronously, so
+        /// everything the run notified is captured by the
         /// time the awaited reconnection returns.
         /// </summary>
         private static async Task<IReadOnlyList<string>> CaptureFailedAttemptNotificationsAsync(string pluginName, Func<Task> reconnection)
@@ -530,7 +520,7 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
             public ReconnectEngineFake()
             {
                 // Registered exactly as every connector registers its own InternalStartAsync
-                // (BinancePlugin.cs:72, CoinbasePlugin.cs:76, KrakenPlugin.cs:86, ...).
+                // (BinancePlugin, CoinbasePlugin, KrakenPlugin, ...).
                 SetReconnectionAction(ReconnectActionAsync);
             }
 
@@ -586,10 +576,9 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
             /// it exactly like production does.
             ///
             /// The internal start here is the very method registered with SetReconnectionAction — that is
-            /// how every real connector is wired (e.g. BinancePlugin.cs:72 registers InternalStartAsync
-            /// and BinancePlugin.cs:89 awaits it from StartAsync), and reproducing it is what makes the
-            /// engine's separate invoke of the same action (BasePluginDataRetriever.cs:378-381) visible as
-            /// the double subscribe burst it is.
+            /// how every real connector is wired (e.g. BinancePlugin registers InternalStartAsync and
+            /// awaits it from StartAsync), and reproducing it is what would make a separate engine invoke
+            /// of the same action visible as a double subscribe burst.
             /// </summary>
             public override async Task StartAsync()
             {
@@ -609,7 +598,7 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
                                 await FailingVenueStartAsync();
                             }
 
-                            // Real connectors also announce CONNECTED here (CoinbasePlugin.cs:118). The
+                            // Real connectors also announce CONNECTED here (CoinbasePlugin does). The
                             // fake deliberately does not, so ConnectedNotificationCount counts only what
                             // the ENGINE announced — otherwise the production duplicate would mask the
                             // engine's own.
@@ -617,7 +606,7 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
                         }
                         catch (Exception ex)
                         {
-                            // CoinbasePlugin.cs:123-128 verbatim: log, then hand the failure to the engine.
+                            // As CoinbasePlugin's StartAsync catch does: log, then hand the failure to the engine.
                             // Inside the engine's own loop that hand-off is swallowed, and Status stays STARTING.
                             var error = ex.Message;
                             LogException(ex, error);
@@ -649,7 +638,7 @@ namespace VisualHFT.DataRetriever.TestingFramework.TestCases
 
             /// <summary>
             /// BasePluginDataRetriever exposes no data-received event (the one in
-            /// RaiseOnDataReceived(DataEventArgs) is commented out at :96), so this protected virtual
+            /// RaiseOnDataReceived(DataEventArgs) is commented out), so this protected virtual
             /// raise method IS the observation seam for provider status notifications.
             /// </summary>
             protected override void RaiseOnDataReceived(Provider heartBeatModel, bool overrideDisabiityFromOtherDataRetrievers = false)
