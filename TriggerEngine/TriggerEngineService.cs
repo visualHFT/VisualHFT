@@ -101,7 +101,11 @@ namespace VisualHFT.TriggerEngine
             }
             ClearConditionStateForRule(rule.RuleID);
             LoadAllRules();
-            Task.Run(() => EvaluateAllRulesAgainstLatestMetrics());
+            // Queue the replay before returning, so it reflects the metrics stored when
+            // the rule changed. Deferred to the thread pool, the snapshot could run after
+            // newer metrics arrived or after a caller reset the engine state. The
+            // background worker still processes the replay asynchronously.
+            EvaluateAllRulesAgainstLatestMetrics();
         }
 
         public static void RemoveRule(long RuleID)
@@ -119,7 +123,8 @@ namespace VisualHFT.TriggerEngine
             }
             ClearConditionStateForRule(RuleID);
             LoadAllRules();
-            Task.Run(() => EvaluateAllRulesAgainstLatestMetrics());
+            // Queued before returning, for the same reason as in AddOrUpdateRule.
+            EvaluateAllRulesAgainstLatestMetrics();
         }
 
         // Condition state is keyed by position on the rule, so an edit that
@@ -469,31 +474,29 @@ namespace VisualHFT.TriggerEngine
 
         private static void EvaluateAllRulesAgainstLatestMetrics()
         {
-            Task.Run(() =>
+            var latestMetrics = LastMetricValues.ToArray(); // Snapshot current metrics
+
+            foreach (var kvp in latestMetrics)
             {
-                var latestMetrics = LastMetricValues.ToArray(); // Snapshot current metrics
+                var parts = kvp.Key.Split('.');
+                if (parts.Length != 4)
+                    continue;
 
-                foreach (var kvp in latestMetrics)
-                {
-                    var parts = kvp.Key.Split('.');
-                    if (parts.Length != 4)
-                        continue;
+                var plugin = parts[0];
+                var metric = parts[1];
+                var exchange = parts[2];
+                var symbol = parts[3];
 
-                    var plugin = parts[0];
-                    var metric = parts[1];
-                    var exchange = parts[2];
-                    var symbol = parts[3];
-
-                    // Re-present the ORIGINAL observation (value + timestamp), flagged as
-                    // a replay. Stamping DateTime.UtcNow here fabricated an observation
-                    // that no market data produced, which both re-fired already-fired
-                    // actions and advanced sustained-condition windows on wall-clock alone.
-                    var metricEvent = new MetricEvent(
-                        plugin, metric, exchange, symbol,
-                        kvp.Value.Value, kvp.Value.Timestamp, IsReplay: true);
-                    _ = MetricChannel.Writer.WriteAsync(metricEvent);
-                }
-            });
+                // Re-present the ORIGINAL observation (value + timestamp), flagged as
+                // a replay. Stamping DateTime.UtcNow here fabricated an observation
+                // that no market data produced, which both re-fired already-fired
+                // actions and advanced sustained-condition windows on wall-clock alone.
+                var metricEvent = new MetricEvent(
+                    plugin, metric, exchange, symbol,
+                    kvp.Value.Value, kvp.Value.Timestamp, IsReplay: true);
+                // The channel is unbounded, so TryWrite completes synchronously.
+                MetricChannel.Writer.TryWrite(metricEvent);
+            }
         }
 
 
