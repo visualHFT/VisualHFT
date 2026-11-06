@@ -13,8 +13,8 @@
 
   <ItemGroup>
 	<PackageReference Include="Moq" Version="4.21.0" />
-	<PackageReference Include="xunit.v3.assert" Version="4.0.1" />
-	<PackageReference Include="xunit.v3.extensibility.core" Version="4.0.1" />
+	<PackageReference Include="xunit.v3.assert" Version="4.0.2" />
+	<PackageReference Include="xunit.v3.extensibility.core" Version="4.0.2" />
   </ItemGroup>
 
   <ItemGroup>
