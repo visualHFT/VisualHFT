@@ -39,13 +39,13 @@
                                 <LineBreak />
                                 <Run FontWeight="Bold">How to Estimate</Run>
                                 <LineBreak />
-                                <Run>1. Observe your instrument's daily traded volume (in base units, e.g., BTC, shares, contracts).</Run>
+                                <Run>1. Take your instrument's daily traded volume without its opening and closing auction crosses (in base units, e.g., BTC, shares, contracts).</Run>
                                 <LineBreak />
-                                <Run>2. Divide by Number of Buckets (default 50).</Run>
+                                <Run>2. Divide by 200 and keep Number of Buckets at 50: the window then covers about a quarter of a day.</Run>
                                 <LineBreak />
-                                <Run FontStyle="Italic">Example: If BTC/USD trades ~10,000 BTC/day with 50 buckets, set V = 200.</Run>
+                                <Run FontStyle="Italic">Example: If BTC/USD trades ~10,000 BTC/day (no auctions), set V = 50.</Run>
                                 <LineBreak />
-                                <Run FontStyle="Italic">Example: If a stock trades ~5M shares/day with 50 buckets, set V = 100,000.</Run>
+                                <Run FontStyle="Italic">Example: If a stock trades ~5M shares/day outside its auction crosses, set V = 25,000.</Run>
                                 <LineBreak />
                                 <LineBreak />
                                 <Run FontWeight="Bold">Sizing Guidelines</Run>
