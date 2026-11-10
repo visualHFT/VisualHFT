@@ -42,6 +42,13 @@ namespace VisualHFT.Studies
         private const string colorWhite = "White";
         private const int DEFAULT_NUMBER_OF_BUCKETS = 50;
 
+        // A print flagged no-aggressor has no taker, so it has no side to count: an auction cross, for example. The flag is a
+        // whole token in Trade.Flags, a comma- or space-separated list.
+        private const string NoAggressorToken = "no-aggressor";
+
+        // The largest double that converts to a decimal without overflow (decimal.MaxValue is about 7.9e28).
+        private const double MaxDecimalMid = 7.9e28;
+
         private bool _disposed = false; // to track whether the object has been disposed
         private PlugInSettings _settings;
         private readonly object _lockBucket = new object();
@@ -95,7 +102,7 @@ namespace VisualHFT.Studies
         public override string TileTitle { get; set; } = "VPIN";
         public override string TileToolTip { get; set; } = "<b>VPIN</b> (Volume-Synchronized Probability of Informed Trading) measures order-flow imbalance on a volume clock. Trades are grouped into buckets of equal traded volume. For each bucket we take the volume bought by aggressors minus the volume sold by aggressors, and show the average absolute imbalance over the last n buckets. 0 means every bucket was balanced; 1 means every bucket was one-sided.<br/><br/>" +
                 "<b>It is not a probability, and it is not a warning signal.</b> Andersen and Bondarenko (2014, 2015) showed that the metric's forecasting record came from its original classifier tracking volatility rather than from informed trading. Read it as a description of how one-sided recent flow has been, not as a forecast.<br/><br/>" +
-                "<b>Bucket volume decides the number.</b> Small buckets read high on random flow by arithmetic alone: with four equally sized prints per bucket the average on coin-flip sides is 0.375, with two it is 0.500, and with one it is 1.000. Size the bucket from the instrument's daily volume - the paper divides average daily volume by the number of buckets - and aim for at least 20 trades per bucket.<br/><br/>" +
+                "<b>Bucket volume decides the number.</b> Small buckets read high on random flow by arithmetic alone: with four equally sized prints per bucket the average on coin-flip sides is 0.375, with two it is 0.500, and with one it is 1.000. Size the bucket as the instrument's daily volume without its opening and closing auction crosses, divided by 200, and keep the window at 50 buckets: the window then covers about a quarter of the day, and the corrected form shows its first value once a quarter of the day's volume has traded. (The paper divides average daily volume by the number of buckets, so its window covers a whole day.) Aim for at least 20 trades per bucket.<br/><br/>" +
                 "<b>Corrected form</b> (optional, off by default)<br/>" +
                 "Classifies each trade by the tick rule - a print above the previous print is a buy, below is a sell, unchanged repeats the previous side - which Chakrabarty, Pascual and Shkilko (2015) found more accurate than the paper's own bulk classifier. The paper's method splits a bucket's volume fractionally between the two sides; assigning each whole print to one side can only produce buckets at least as one-sided, so expect this to read higher than a bulk-classified figure on the same tape. That follows from the two constructions - it is not a measurement, and no bulk classifier ships here to compare against. Compare ranks and percentiles rather than published absolute thresholds. No value is shown until a full window of buckets has closed, and none is shown while the bucket volume is too small to hold 20 trades.<br/><br/>" +
                 "<b>Legacy form</b> (default)<br/>" +
@@ -152,6 +159,9 @@ namespace VisualHFT.Studies
                 return;
             if (_settings.Provider.ProviderID != e.ProviderId || _settings.Symbol != e.Symbol)
                 return;
+            // A print with no taker has no side to count, in either form. A reported side wins over the token.
+            if (!e.IsBuy.HasValue && HasNoAggressorToken(e.Flags))
+                return;
 
             lock (_lockBucket)
             {
@@ -167,13 +177,20 @@ namespace VisualHFT.Studies
                 if (_bucketVolumeSize == 0)
                     _bucketVolumeSize = (decimal)_settings.BucketVolSize;
 
-                // Quote rule: classify using mid-price from the order book
+                // Quote rule: classify using a mid price
                 // Price >= mid → buy (aggressor lifting the ask)
                 // Price <  mid → sell (aggressor hitting the bid)
+                // The mid stamped on the trade is the quote the print arrived against. The last book mid can already
+                // include the print's own book change, when a feed publishes that change first, so it is the fallback.
                 // Fallback to provider's IsBuy if no mid-price yet
+                // A stamp too large for a decimal is not a price: the print is skipped, as when no mid is known at all.
+                double tradeMid = e.MarketMidPrice;
+                if (double.IsFinite(tradeMid) && tradeMid > MaxDecimalMid)
+                    return;
+                decimal mid = double.IsFinite(tradeMid) && tradeMid > 0d ? (decimal)tradeMid : _lastMarketMidPrice;
                 bool isBuy;
-                if (_lastMarketMidPrice > 0)
-                    isBuy = e.Price >= _lastMarketMidPrice;
+                if (mid > 0)
+                    isBuy = e.Price >= mid;
                 else if (e.IsBuy.HasValue)
                     isBuy = e.IsBuy.Value;
                 else
@@ -187,6 +204,20 @@ namespace VisualHFT.Studies
                 else
                     _currentSellVolume += remainingSize;
                 _currentBucketVolume += remainingSize;
+
+                // Only the last n buckets can stay in an n-bucket window. When this trade closes more than n, every one of
+                // the last n holds this trade alone, so the buckets before them are skipped instead of closed and evicted:
+                // the same final value, and at most n bucket closes for one trade however large it is.
+                if (_bucketVolumeSize > 0 && _currentBucketVolume >= _bucketVolumeSize)
+                {
+                    decimal skipped = decimal.Floor(_currentBucketVolume / _bucketVolumeSize) - _bucketImbalances.Length;
+                    if (skipped > 0)
+                    {
+                        _currentBucketVolume -= skipped * _bucketVolumeSize;
+                        _currentBuyVolume = isBuy ? _currentBucketVolume : 0;
+                        _currentSellVolume = isBuy ? 0 : _currentBucketVolume;
+                    }
+                }
 
                 // Complete as many buckets as this trade fills
                 while (_currentBucketVolume >= _bucketVolumeSize && _bucketVolumeSize > 0)
@@ -215,6 +246,26 @@ namespace VisualHFT.Studies
                 DoCalculation(false); // Interim update with current state
             }
         }
+        // Span scan of the whole tokens in Trade.Flags, no allocation.
+        private static bool HasNoAggressorToken(string flags)
+        {
+            if (string.IsNullOrEmpty(flags))
+                return false;
+
+            ReadOnlySpan<char> rest = flags;
+            while (!rest.IsEmpty)
+            {
+                int end = rest.IndexOfAny(',', ' ');
+                ReadOnlySpan<char> token = end < 0 ? rest : rest.Slice(0, end);
+                if (token.SequenceEqual(NoAggressorToken))
+                    return true;
+
+                rest = end < 0 ? ReadOnlySpan<char>.Empty : rest.Slice(end + 1);
+            }
+
+            return false;
+        }
+
         private void LIMITORDERBOOK_OnDataReceived(OrderBook e)
         {
             /*
