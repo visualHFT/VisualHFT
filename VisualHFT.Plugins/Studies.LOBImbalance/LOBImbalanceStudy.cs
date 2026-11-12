@@ -96,22 +96,55 @@ namespace VisualHFT.Studies
             // state is shared across every subscriber of this book, so a per-study weighting mode
             // cannot be honoured there without corrupting the value other consumers depend on.
             double currentSpread = e.Spread;
-            _spreadMedian.Observe(currentSpread);
+            // Spread is 0 unless both sides have a best price. Feeding those zeros to the median
+            // drags it to 0, and touch weighting then collapses onto the best level.
+            if (currentSpread > 0)
+                _spreadMedian.Observe(currentSpread);
             double spreadScale = SpreadScaleResolver.Resolve(e.PriceDecimalPlaces, currentSpread, _spreadMedian.Count, _spreadMedian.Estimate);
 
-            _lobImbalance = ImbalanceCalculator.Calculate(e.Bids, e.Asks, e.MaxDepth, _settings.Weighting, spreadScale);
+            // The imbalance is undefined when a side is empty or the captured sizes sum to zero.
+            // NaN marks it, and the model then goes out with no value instead of a 0 that reads
+            // as a balanced book.
+            var bids = e.Bids;
+            var asks = e.Asks;
+            int bidsCount = bids?.Count() ?? 0;
+            int asksCount = asks?.Count() ?? 0;
+            _lobImbalance = double.NaN;
+            if (bidsCount > 0 && asksCount > 0)
+            {
+                double imbalance = ImbalanceCalculator.Calculate(bids, asks, e.MaxDepth, _settings.Weighting, spreadScale);
+                // The calculator also returns 0 for a zero total. A 0 with size on the bid side is a
+                // balanced book (equal totals), so one side is enough to tell the two apart.
+                if (imbalance != 0 || HasSizeWithinDepth(bids, bidsCount, e.MaxDepth))
+                    _lobImbalance = imbalance;
+            }
             _lobMidPrice = e.MidPrice;
             DoCalculationAndSend();
+        }
+
+        private static bool HasSizeWithinDepth(CachedCollection<BookItem> side, int count, int depth)
+        {
+            int n = Math.Min(count, depth);
+            for (int i = 0; i < n; i++)
+            {
+                if (side[i].Size.GetValueOrDefault() > 0)
+                    return true;
+            }
+            return false;
         }
 
         private void DoCalculationAndSend()
         {
             if (Status != VisualHFT.PluginManager.ePluginStatus.STARTED) return;
             var newItem = new BaseStudyModel();
-            newItem.Value = (decimal)_lobImbalance;
+            // Assigning Value is what marks the model as carrying data; leave it unset when undefined.
+            if (!double.IsNaN(_lobImbalance))
+                newItem.Value = (decimal)_lobImbalance;
             newItem.Format = ValueFormat;
             newItem.Timestamp = HelperTimeProvider.Now;
-            newItem.MarketMidPrice = (decimal)_lobMidPrice;
+            // A model with no value keeps Value 0, so it also goes out with mid 0 (as a one-sided book already does):
+            // the tile drops a model that repeats the last value, mid and colour, and would otherwise keep a held 0.
+            newItem.MarketMidPrice = double.IsNaN(_lobImbalance) ? 0m : (decimal)_lobMidPrice;
 
             AddCalculation(newItem);
         }
@@ -130,9 +163,11 @@ namespace VisualHFT.Studies
         {
             //Aggregation: last
             var existing = dataCollection[^1]; // Get the last item in the collection
-            existing.Value = newItem.Value;
-            existing.Format = newItem.Format;
-            existing.MarketMidPrice = newItem.MarketMidPrice;
+            // The latest book decides the bucket, including whether it has a value at all.
+            // The bucket keeps its start time: the collection measures the next bucket from it.
+            var bucketStart = existing.Timestamp;
+            existing.copyFrom(newItem);
+            existing.Timestamp = bucketStart;
 
             base.onDataAggregation(dataCollection, newItem, lastItemAggregationCount);
         }
