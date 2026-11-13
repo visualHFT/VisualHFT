@@ -332,12 +332,16 @@ namespace VisualHFT.Commons.PluginManager
         }
         protected T LoadFromUserSettings<T>() where T : class
         {
-            var jObject = UserSettings.SettingsManager.Instance.GetSetting<object>(SettingKey.TILE_STUDY, GetPluginUniqueID()) as Newtonsoft.Json.Linq.JObject;
-            if (jObject != null)
+            // The stored value is the JObject read from disk until the first save in this process;
+            // after that it is the saved settings object itself. Read both, and always return a new
+            // copy, so a second instance never shares (and changes) the first instance's settings.
+            var stored = UserSettings.SettingsManager.Instance.GetSetting<object>(SettingKey.TILE_STUDY, GetPluginUniqueID());
+            if (stored == null)
             {
-                return jObject.ToObject<T>();
+                return null;
             }
-            return null;
+            var token = stored as Newtonsoft.Json.Linq.JToken ?? Newtonsoft.Json.Linq.JToken.FromObject(stored);
+            return (token as Newtonsoft.Json.Linq.JObject)?.ToObject<T>();
         }
 
         private string _pluginUniqueID = null;
