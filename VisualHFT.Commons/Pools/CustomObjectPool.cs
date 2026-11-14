@@ -59,6 +59,7 @@ namespace VisualHFT.Commons.Pools
         // Rotating positions per segment for contention distribution
         private readonly long[] _getPositions;
         private readonly long[] _returnPositions;
+        private readonly long[] _sweepPositions;
 
         // Padding to prevent false sharing
         private readonly long _padding1, _padding2, _padding3, _padding4;
@@ -102,6 +103,7 @@ namespace VisualHFT.Commons.Pools
             // Allocate position trackers and available counts for all possible segments
             _getPositions = new long[MAX_SEGMENTS];
             _returnPositions = new long[MAX_SEGMENTS];
+            _sweepPositions = new long[MAX_SEGMENTS];
             _segmentAvailableCounts = new long[MAX_SEGMENTS];
 
             _instantiator = GetInstantiator();
@@ -287,6 +289,22 @@ namespace VisualHFT.Commons.Pools
                     Volatile.Write(ref _getPositions[segmentIndex], runStart + i + 1);
                     return item;
                 }
+            }
+
+            // Concurrent gets and returns can also leave a counted object behind both windows: written just behind
+            // a get cursor that other gets had moved past, and older than the newest run behind the return cursor.
+            // Each such miss looks at one more window, at a sweep cursor that walks the whole segment, so the object
+            // is found within segment size / 64 misses instead of when the get cursor next goes round the segment.
+            long sweepStart = Interlocked.Add(ref _sweepPositions[segmentIndex], maxScanSlots) - maxScanSlots;
+            startIndex = (int)(sweepStart & _segmentMask);
+            for (int i = 0; i < maxScanSlots; i++)
+            {
+                int index = (startIndex + i) & _segmentMask;
+                if (Volatile.Read(ref segment[index]) == null)
+                    continue;
+                var item = Interlocked.Exchange(ref segment[index], null);
+                if (item != null)
+                    return item;
             }
 
             // Didn't find object despite count suggesting one exists
