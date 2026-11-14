@@ -114,6 +114,10 @@ namespace VisualHFT.Commons.Pools
                 Interlocked.Increment(ref _totalCreated);
             }
             _segmentAvailableCounts[0] = prewarmCount;
+            // The ready objects fill slots 0..prewarmCount-1, so the first return goes after them. A return
+            // cursor left at 0 puts returns behind the get cursor, and a get's 64-slot scan does not reach them
+            // until the get cursor has gone round the whole segment.
+            _returnPositions[0] = prewarmCount;
 
 
 
@@ -268,6 +272,23 @@ namespace VisualHFT.Commons.Pools
                     return item;
             }
 
+            // The count says objects exist but none is in reach of the get cursor. That happens when the get
+            // cursor has moved past the returned objects (concurrent gets and returns can leave it there), and
+            // each miss would move it one slot further. Returns sit just behind the return cursor, so scan once
+            // from the start of that run and resume the get cursor after the object found.
+            long runStart = Volatile.Read(ref _returnPositions[segmentIndex]) - (available + 1);
+            startIndex = (int)(runStart & _segmentMask);
+            for (int i = 0; i < maxScanSlots; i++)
+            {
+                int index = (startIndex + i) & _segmentMask;
+                var item = Interlocked.Exchange(ref segment[index], null);
+                if (item != null)
+                {
+                    Volatile.Write(ref _getPositions[segmentIndex], runStart + i + 1);
+                    return item;
+                }
+            }
+
             // Didn't find object despite count suggesting one exists
             // This can happen under high contention - restore count
             Interlocked.Increment(ref _segmentAvailableCounts[segmentIndex]);
@@ -379,6 +400,10 @@ namespace VisualHFT.Commons.Pools
 
                 // Set available count for new segment
                 _segmentAvailableCounts[currentCount] = prewarmCount;
+
+                // As for the primary segment: returns go after the ready objects. A segment index released by
+                // trimming keeps its old get cursor; the first get repairs it with the rescan in TryGetFromSegment.
+                _returnPositions[currentCount] = prewarmCount;
 
                 // Publish new segment (volatile write ensures visibility)
                 Volatile.Write(ref _segments[currentCount], newSegment);
