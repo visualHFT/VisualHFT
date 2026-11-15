@@ -69,6 +69,7 @@ namespace VisualHFT.Commons.Pools
         private long _totalReturns;
         private long _totalCreated;
         private long _missCount;
+        private long _slowGetCount;
         private long _growthCount;
 
         // Lifecycle
@@ -271,7 +272,13 @@ namespace VisualHFT.Commons.Pools
                 int index = (startIndex + i) & _segmentMask;
                 var item = Interlocked.Exchange(ref segment[index], null);
                 if (item != null)
+                {
+                    // Found past the cursor: move the cursor after it, or every later get reads the same empty
+                    // slots first. Only if no other get moved the cursor meanwhile; a hit at the cursor writes nothing.
+                    if (i > 0)
+                        Interlocked.CompareExchange(ref _getPositions[segmentIndex], startPos + i + 1, startPos + 1);
                     return item;
+                }
             }
 
             // The count says objects exist but none is in reach of the get cursor. That happens when the get
@@ -287,14 +294,16 @@ namespace VisualHFT.Commons.Pools
                 if (item != null)
                 {
                     Volatile.Write(ref _getPositions[segmentIndex], runStart + i + 1);
+                    CountSlowGet();
                     return item;
                 }
             }
 
-            // Concurrent gets and returns can also leave a counted object behind both windows: written just behind
+            // Concurrent gets and returns can also leave counted objects behind both windows: written just behind
             // a get cursor that other gets had moved past, and older than the newest run behind the return cursor.
-            // Each such miss looks at one more window, at a sweep cursor that walks the whole segment, so the object
-            // is found within segment size / 64 misses instead of when the get cursor next goes round the segment.
+            // Each such miss looks at one more window, at a sweep cursor that walks the whole segment, and a hit
+            // moves the get cursor there so the next gets take the objects after it in order. Every object stranded
+            // when a sweep of the segment starts is found before it ends: at most segment size / 64 misses.
             long sweepStart = Interlocked.Add(ref _sweepPositions[segmentIndex], maxScanSlots) - maxScanSlots;
             startIndex = (int)(sweepStart & _segmentMask);
             for (int i = 0; i < maxScanSlots; i++)
@@ -304,13 +313,29 @@ namespace VisualHFT.Commons.Pools
                     continue;
                 var item = Interlocked.Exchange(ref segment[index], null);
                 if (item != null)
+                {
+                    Volatile.Write(ref _getPositions[segmentIndex], sweepStart + i + 1);
+                    CountSlowGet();
                     return item;
+                }
             }
 
             // Didn't find object despite count suggesting one exists
             // This can happen under high contention - restore count
             Interlocked.Increment(ref _segmentAvailableCounts[segmentIndex]);
             return null;
+        }
+
+        // A get served by the rescan or the sweep read up to 192 slots. Counted apart from misses, because such a
+        // get creates nothing and PoolEfficiency still reads 100% while every get pays it.
+        private void CountSlowGet()
+        {
+            long slow = Interlocked.Increment(ref _slowGetCount);
+            if ((slow & 0x7FFF) == 0)
+            {
+                log.Warn($"CustomObjectPool<{typeof(T).Name}> served {slow} gets only after its first 64-slot scan missed. " +
+                         $"Instantiator: {_instantiator}");
+            }
         }
 
         // ═══════════════════════════════════════════════════════════════════
@@ -363,6 +388,10 @@ namespace VisualHFT.Commons.Pools
                 int index = (startIndex + i) & _segmentMask;
                 if (Interlocked.CompareExchange(ref segment[index], obj, null) == null)
                 {
+                    // Placed past the cursor: move the cursor after it, as a get does, or every later return reads
+                    // the same taken slots first.
+                    if (i > 0)
+                        Interlocked.CompareExchange(ref _returnPositions[segmentIndex], startPos + i + 1, startPos + 1);
                     Interlocked.Increment(ref _segmentAvailableCounts[segmentIndex]);
                     return true;
                 }
@@ -564,38 +593,48 @@ namespace VisualHFT.Commons.Pools
             Interlocked.Exchange(ref _totalGets, 0);
             Interlocked.Exchange(ref _totalReturns, 0);
             Interlocked.Exchange(ref _missCount, 0);
+            Interlocked.Exchange(ref _slowGetCount, 0);
             Interlocked.Exchange(ref _consecutiveLowUtilizationChecks, 0);
             Interlocked.Exchange(ref _peakObjectsInUse, 0);
 
-            // Reset positions
-            for (int i = 0; i < MAX_SEGMENTS; i++)
+            // Move each segment's objects to its first slots and put the cursors around them, as a new segment has
+            // them. Zeroing the cursors and leaving the objects where they were made the gets after a Reset read
+            // empty slots. Like the rest of Reset, this expects no concurrent Get or Return; slot moves still use
+            // Interlocked, so an object is never handed out twice.
+            int segmentCount = Volatile.Read(ref _activeSegmentCount);
+            for (int seg = 0; seg < MAX_SEGMENTS; seg++)
             {
-                Interlocked.Exchange(ref _getPositions[i], 0);
-                Interlocked.Exchange(ref _returnPositions[i], 0);
+                var segment = seg < segmentCount ? Volatile.Read(ref _segments[seg]) : null;
+                int kept = segment == null ? 0 : CompactToFront(segment);
+                Interlocked.Exchange(ref _getPositions[seg], 0);
+                Interlocked.Exchange(ref _returnPositions[seg], kept);
+                Interlocked.Exchange(ref _sweepPositions[seg], 0);
+                if (segment != null)
+                    Interlocked.Exchange(ref _segmentAvailableCounts[seg], kept);
             }
+        }
 
-            // Refill primary segment
-            var primarySegment = _segments[0];
-            int refilled = 0;
-            for (int i = 0; i < _segmentSize; i++)
+        // Moves the segment's objects to slots 0..n-1 in their order and resets each; returns n.
+        private static int CompactToFront(T[] segment)
+        {
+            int next = 0;
+            for (int i = 0; i < segment.Length; i++)
             {
-                if (primarySegment[i] == null)
+                var obj = Interlocked.Exchange(ref segment[i], null);
+                if (obj == null)
                     continue;
-                var obj = Volatile.Read(ref primarySegment[i]);
-                if (obj != null)
+                (obj as IResettable)?.Reset();
+                (obj as IList)?.Clear();
+                bool placed = false;
+                while (!placed && next <= i)
                 {
-                    (obj as IResettable)?.Reset();
-                    (obj as IList)?.Clear();
-                    refilled++;
+                    placed = Interlocked.CompareExchange(ref segment[next], obj, null) == null;
+                    next++;
                 }
-                else
-                {
-                    primarySegment[i] = new T();
-                    Interlocked.Increment(ref _totalCreated);
-                    refilled++;
-                }
+                if (!placed)
+                    (obj as IDisposable)?.Dispose(); // a concurrent Return filled every slot up to here
             }
-            Interlocked.Exchange(ref _segmentAvailableCounts[0], refilled);
+            return next;
         }
 
         public int AvailableObjects
@@ -640,6 +679,12 @@ namespace VisualHFT.Commons.Pools
         public long TotalGets => Volatile.Read(ref _totalGets);
         public long TotalReturns => Volatile.Read(ref _totalReturns);
         public long TotalCreated => Volatile.Read(ref _totalCreated);
+
+        /// <summary>
+        /// Gets whose object was found only after the first 64-slot scan missed: by the rescan behind the return
+        /// cursor or by the sweep. They create nothing, so <see cref="PoolEfficiency"/> does not show them.
+        /// </summary>
+        public long SlowGets => Volatile.Read(ref _slowGetCount);
         public int SegmentCount => Volatile.Read(ref _activeSegmentCount);
         public int SegmentSize => _segmentSize;
         public int MaxSegmentCount => MAX_SEGMENTS;
