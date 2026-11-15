@@ -293,15 +293,206 @@ namespace VisualHFT.Commons.Tests
             Assert.Equal(1, pool.SlowGets - slow0);
         }
 
-        // Reset() zeroes the statistics. It must leave each segment's objects between its get and return cursors,
-        // with the count equal to the objects, so the gets after it take them in order and nothing is created.
+        [Fact]
+        public void SlowGets_CountsAGetServedByTheRescan()
+        {
+            using var pool = new CustomObjectPool<Tracked>(65_536);
+            StrandBlock(pool, block: 0, live: 10);
+            long slow0 = pool.SlowGets;
+            long created0 = pool.TotalCreated;
+
+            pool.Get();
+
+            Assert.Equal(0, pool.TotalCreated - created0);
+            Assert.Equal(1, pool.SlowGets - slow0);
+        }
+
+        // Reset() is called to zero the statistics, from the UI thread and while other threads get and return. What a
+        // get finds depends only on the slots, the counts and the cursors, so Reset must leave all of them as they were.
         [Theory]
         [InlineData(1)]
         [InlineData(2)]
         [InlineData(3)]
-        public void Reset_LeavesTheObjectsBetweenTheCursors_AndKeepsEveryObject(int seed)
+        public void Reset_ZeroesTheStatistics_AndLeavesSlotsCountsAndCursorsAsTheyWere(int seed)
         {
             using var pool = new CustomObjectPool<Tracked>(65_536);
+            Churn(pool, seed);
+            const BindingFlags Np = BindingFlags.NonPublic | BindingFlags.Instance;
+            var type = pool.GetType();
+            var segments = (Tracked[][])type.GetField("_segments", Np)!.GetValue(pool)!;
+            var before = new Tracked[pool.SegmentCount][];
+            for (int s = 0; s < before.Length; s++)
+            {
+                before[s] = (Tracked[])segments[s].Clone();
+            }
+            var stateFields = new[] { "_segmentAvailableCounts", "_getPositions", "_returnPositions", "_sweepPositions" };
+            var stateBefore = new long[stateFields.Length][];
+            for (int f = 0; f < stateFields.Length; f++)
+            {
+                stateBefore[f] = (long[])((long[])type.GetField(stateFields[f], Np)!.GetValue(pool)!).Clone();
+            }
+
+            pool.Reset();
+
+            Assert.Equal(0, pool.TotalGets);
+            Assert.Equal(0, pool.TotalReturns);
+            Assert.Equal(0, pool.SlowGets);
+            Assert.Equal(1.0, pool.PoolEfficiency);
+            for (int f = 0; f < stateFields.Length; f++)
+            {
+                Assert.Equal(stateBefore[f], (long[])type.GetField(stateFields[f], Np)!.GetValue(pool)!);
+            }
+            for (int s = 0; s < before.Length; s++)
+            {
+                for (int i = 0; i < before[s].Length; i++)
+                {
+                    Assert.True(ReferenceEquals(before[s][i], segments[s][i]), $"Reset moved slot {i} of segment {s}.");
+                }
+            }
+        }
+
+        // A return puts its object in a slot and then raises the count. A Reset that counted the slots in between
+        // would include that object, and the return would then count it a second time: one object counted twice,
+        // never found, read for by every get that reaches the segment.
+        [Fact]
+        public void Reset_DuringAReturnBetweenItsSlotAndItsCount_LeavesTheCountForTheReturnToRaise()
+        {
+            using var pool = new CustomObjectPool<Tracked>(65_536);
+            const BindingFlags Np = BindingFlags.NonPublic | BindingFlags.Instance;
+            var type = pool.GetType();
+            var segment = ((Tracked[][])type.GetField("_segments", Np)!.GetValue(pool)!)[0];
+            var counts = (long[])type.GetField("_segmentAvailableCounts", Np)!.GetValue(pool)!;
+            var returnPositions = (long[])type.GetField("_returnPositions", Np)!.GetValue(pool)!;
+            long countBefore = counts[0];
+            segment[returnPositions[0]] = new Tracked();
+            returnPositions[0]++;
+
+            pool.Reset();
+
+            Assert.Equal(countBefore, counts[0]);
+        }
+
+        public sealed class CountedResets : VisualHFT.Commons.Model.IResettable
+        {
+            public static long Resets;
+            public void Reset() => System.Threading.Interlocked.Increment(ref Resets);
+        }
+
+        // A pool at its 64-segment cap holds 64 segments of slots, most of them empty. Reset() must cost the same
+        // there as anywhere: it touches no pooled object and moves no slot.
+        [Fact]
+        public void Reset_AtTheSegmentCap_TouchesNoPooledObjectAndMovesNoSlot()
+        {
+            using var pool = new CustomObjectPool<CountedResets>(1_024);
+            const BindingFlags Np = BindingFlags.NonPublic | BindingFlags.Instance;
+            var type = pool.GetType();
+            var grow = type.GetMethod("TryGrowPool", Np)!;
+            var lastGrowth = type.GetField("_lastGrowthTimestamp", Np)!;
+            while (pool.SegmentCount < pool.MaxSegmentCount)
+            {
+                lastGrowth.SetValue(pool, 0L);
+                grow.Invoke(pool, null);
+            }
+            var held = new List<CountedResets>();
+            for (int k = 0; k < 3 * pool.SegmentSize; k++)
+            {
+                held.Add(pool.Get());
+            }
+            foreach (var item in held)
+            {
+                pool.Return(item);
+            }
+
+            var segments = (CountedResets[][])type.GetField("_segments", Np)!.GetValue(pool)!;
+            var before = new CountedResets[pool.SegmentCount][];
+            for (int s = 0; s < before.Length; s++)
+            {
+                before[s] = (CountedResets[])segments[s].Clone();
+            }
+            long resets0 = System.Threading.Interlocked.Read(ref CountedResets.Resets);
+
+            pool.Reset();
+
+            Assert.Equal(resets0, System.Threading.Interlocked.Read(ref CountedResets.Resets));
+            for (int s = 0; s < before.Length; s++)
+            {
+                for (int i = 0; i < before[s].Length; i++)
+                {
+                    Assert.True(ReferenceEquals(before[s][i], segments[s][i]), $"Reset moved slot {i} of segment {s}.");
+                }
+            }
+        }
+
+        // Reset() runs while other threads get and return. Afterwards every segment's available count must still
+        // equal the objects in its slots: a count above them makes gets scan for objects that are not there, one
+        // below them strands objects.
+        [Fact]
+        public void ResetDuringConcurrentGetsAndReturns_LeavesEveryCountEqualToItsObjects()
+        {
+            using var pool = new CustomObjectPool<Tracked>(4_096);
+            const int threads = 6;
+            using var stop = new System.Threading.ManualResetEventSlim(false);
+            var held = new List<Tracked>[threads];
+            var workers = new System.Threading.Tasks.Task[threads + 2];
+            for (int t = 0; t < threads; t++)
+            {
+                int id = t;
+                held[id] = new List<Tracked>(2_048);
+                workers[id] = System.Threading.Tasks.Task.Run(() =>
+                {
+                    var mine = held[id];
+                    var rnd = new Random(31 + id);
+                    while (!stop.IsSet)
+                    {
+                        if (mine.Count == 0 || (mine.Count < 1_500 && rnd.Next(100) < 52))
+                        {
+                            mine.Add(pool.Get());
+                        }
+                        else
+                        {
+                            int i = rnd.Next(mine.Count);
+                            var item = mine[i];
+                            mine[i] = mine[mine.Count - 1];
+                            mine.RemoveAt(mine.Count - 1);
+                            pool.Return(item);
+                        }
+                    }
+                });
+            }
+            for (int r = 0; r < 2; r++)
+            {
+                workers[threads + r] = System.Threading.Tasks.Task.Run(() =>
+                {
+                    while (!stop.IsSet)
+                    {
+                        pool.Reset();
+                    }
+                });
+            }
+            System.Threading.Thread.Sleep(1_500);
+            stop.Set();
+            System.Threading.Tasks.Task.WaitAll(workers);
+
+            const BindingFlags Np = BindingFlags.NonPublic | BindingFlags.Instance;
+            var type = pool.GetType();
+            var segments = (Tracked[][])type.GetField("_segments", Np)!.GetValue(pool)!;
+            var counts = (long[])type.GetField("_segmentAvailableCounts", Np)!.GetValue(pool)!;
+            for (int s = 0; s < pool.SegmentCount; s++)
+            {
+                int objects = 0;
+                foreach (var slot in segments[s])
+                {
+                    if (slot != null)
+                    {
+                        objects++;
+                    }
+                }
+                Assert.True(objects == counts[s], $"Segment {s}: count {counts[s]:N0}, objects in its slots {objects:N0}.");
+            }
+        }
+
+        private static List<Tracked> Churn(CustomObjectPool<Tracked> pool, int seed)
+        {
             var rnd = new Random(seed);
             int holdCap = 1_000 + rnd.Next(40_000);
             var held = new List<Tracked>();
@@ -320,50 +511,7 @@ namespace VisualHFT.Commons.Tests
                     pool.Return(item);
                 }
             }
-            foreach (var item in held)
-            {
-                pool.Return(item);
-            }
-
-            var before = PooledObjects(pool);
-            pool.Reset();
-            var after = PooledObjects(pool);
-            Assert.True(before.SetEquals(after), $"Reset kept {after.Count:N0} of the {before.Count:N0} pooled objects.");
-
-            const BindingFlags Np = BindingFlags.NonPublic | BindingFlags.Instance;
-            var type = pool.GetType();
-            var segments = (Tracked[][])type.GetField("_segments", Np)!.GetValue(pool)!;
-            var counts = (long[])type.GetField("_segmentAvailableCounts", Np)!.GetValue(pool)!;
-            var getPositions = (long[])type.GetField("_getPositions", Np)!.GetValue(pool)!;
-            var returnPositions = (long[])type.GetField("_returnPositions", Np)!.GetValue(pool)!;
-            for (int s = 0; s < pool.SegmentCount; s++)
-            {
-                var segment = segments[s];
-                int objects = 0;
-                foreach (var slot in segment)
-                {
-                    if (slot != null)
-                    {
-                        objects++;
-                    }
-                }
-                Assert.Equal(objects, counts[s]);
-                Assert.Equal(objects, returnPositions[s] - getPositions[s]);
-                for (long p = getPositions[s]; p < returnPositions[s]; p++)
-                {
-                    Assert.True(segment[p & (segment.Length - 1)] != null, $"Segment {s}: slot {p} between the cursors is empty after Reset.");
-                }
-            }
-
-            int available = pool.AvailableObjects;
-            long created0 = pool.TotalCreated;
-            long slow0 = pool.SlowGets;
-            for (int k = 0; k < available; k++)
-            {
-                pool.Get();
-            }
-            Assert.Equal(0, pool.TotalCreated - created0);
-            Assert.Equal(0, pool.SlowGets - slow0);
+            return held;
         }
 
         private static void StrandBlock(CustomObjectPool<Tracked> pool, int block, int live)
@@ -389,24 +537,6 @@ namespace VisualHFT.Commons.Tests
             counts[0] = block + live;
             returnPositions[0] = 1_000 + live;
             getPositions[0] = 1_000 + live + 200;
-        }
-
-        private static HashSet<Tracked> PooledObjects(CustomObjectPool<Tracked> pool)
-        {
-            const BindingFlags Np = BindingFlags.NonPublic | BindingFlags.Instance;
-            var segments = (Tracked[][])pool.GetType().GetField("_segments", Np)!.GetValue(pool)!;
-            var set = new HashSet<Tracked>(ReferenceEqualityComparer.Instance);
-            for (int s = 0; s < pool.SegmentCount; s++)
-            {
-                foreach (var slot in segments[s])
-                {
-                    if (slot != null)
-                    {
-                        set.Add(slot);
-                    }
-                }
-            }
-            return set;
         }
     }
 }

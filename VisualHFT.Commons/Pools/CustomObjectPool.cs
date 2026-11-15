@@ -597,44 +597,9 @@ namespace VisualHFT.Commons.Pools
             Interlocked.Exchange(ref _consecutiveLowUtilizationChecks, 0);
             Interlocked.Exchange(ref _peakObjectsInUse, 0);
 
-            // Move each segment's objects to its first slots and put the cursors around them, as a new segment has
-            // them. Zeroing the cursors and leaving the objects where they were made the gets after a Reset read
-            // empty slots. Like the rest of Reset, this expects no concurrent Get or Return; slot moves still use
-            // Interlocked, so an object is never handed out twice.
-            int segmentCount = Volatile.Read(ref _activeSegmentCount);
-            for (int seg = 0; seg < MAX_SEGMENTS; seg++)
-            {
-                var segment = seg < segmentCount ? Volatile.Read(ref _segments[seg]) : null;
-                int kept = segment == null ? 0 : CompactToFront(segment);
-                Interlocked.Exchange(ref _getPositions[seg], 0);
-                Interlocked.Exchange(ref _returnPositions[seg], kept);
-                Interlocked.Exchange(ref _sweepPositions[seg], 0);
-                if (segment != null)
-                    Interlocked.Exchange(ref _segmentAvailableCounts[seg], kept);
-            }
-        }
-
-        // Moves the segment's objects to slots 0..n-1 in their order and resets each; returns n.
-        private static int CompactToFront(T[] segment)
-        {
-            int next = 0;
-            for (int i = 0; i < segment.Length; i++)
-            {
-                var obj = Interlocked.Exchange(ref segment[i], null);
-                if (obj == null)
-                    continue;
-                (obj as IResettable)?.Reset();
-                (obj as IList)?.Clear();
-                bool placed = false;
-                while (!placed && next <= i)
-                {
-                    placed = Interlocked.CompareExchange(ref segment[next], obj, null) == null;
-                    next++;
-                }
-                if (!placed)
-                    (obj as IDisposable)?.Dispose(); // a concurrent Return filled every slot up to here
-            }
-            return next;
+            // Statistics only. The slots, the available counts and the cursors agree with each other, and Get and
+            // Return keep them so; rewriting them here would race with gets and returns on other threads (callers
+            // reset while the pool is in use) and, at the segment cap, cost a pass over every slot.
         }
 
         public int AvailableObjects
