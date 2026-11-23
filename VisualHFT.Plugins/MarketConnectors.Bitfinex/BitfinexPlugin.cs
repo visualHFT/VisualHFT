@@ -46,6 +46,9 @@ namespace MarketConnectors.Bitfinex
         private Dictionary<string, HelperCustomQueue<Tuple<DateTime?, string, BitfinexOrderBookEntry>>> _eventBuffers = new();
         private Dictionary<string, HelperCustomQueue<Tuple<string, BitfinexTradeSimple>>> _tradesBuffers = new();
         private readonly object _buffersLock = new object(); // ✅ ADD: Thread-safe buffer access
+        // Serializes the two writers that fill a symbol's empty book slot, the websocket snapshot frame
+        // (socket thread) and the REST snapshot (start thread), and ClearAsync, which empties the map.
+        private readonly object _bookSeedLock = new object();
 
         // Per symbol, cleared only in Dispose: a reconnect runs StopAsync then StartAsync, and both run
         // ClearAsync, so clearing them in any of those would forget every id at each reconnect.
@@ -146,6 +149,9 @@ namespace MarketConnectors.Bitfinex
                 {
                     _eventBuffers.Add(symbol, new HelperCustomQueue<Tuple<DateTime?, string, BitfinexOrderBookEntry>>($"<Tuple<DateTime?, string, BitfinexOrderBookEntry>>_{this.Name.Replace(" Plugin", "")}", eventBuffers_onReadAction, eventBuffers_onErrorAction));
                     _tradesBuffers.Add(symbol, new HelperCustomQueue<Tuple<string, BitfinexTradeSimple>>($"<Tuple<DateTime, string, BitfinexTradeSimple>>_{this.Name.Replace(" Plugin", "")}", tradesBuffers_onReadAction, tradesBuffers_onErrorAction));
+                    // The empty slot exists before the level2 subscription, so the snapshot frame the
+                    // venue sends in reply to it can seed the book (UpdateOrderBookSnapshot).
+                    _localOrderBooks.TryAdd(symbol, null);
                 }
 
                 await InitializeDeltasAsync();
@@ -239,13 +245,18 @@ namespace MarketConnectors.Bitfinex
             }
 
             //CLEAR LOB
+            // Under the seed lock: the websocket snapshot callback stores the first book under it, and
+            // can still be running while the outgoing client winds down.
             if (_localOrderBooks != null)
             {
-                foreach (var lob in _localOrderBooks)
+                lock (_bookSeedLock)
                 {
-                    lob.Value?.Dispose();
+                    foreach (var lob in _localOrderBooks)
+                    {
+                        lob.Value?.Dispose();
+                    }
+                    _localOrderBooks.Clear();
                 }
-                _localOrderBooks.Clear();
             }
         }
 
@@ -475,17 +486,25 @@ namespace MarketConnectors.Bitfinex
             foreach (var symbol in GetAllNonNormalizedSymbols())
             {
                 var normalizedSymbol = GetNormalizedSymbol(symbol);
-                if (!_localOrderBooks.ContainsKey(normalizedSymbol))
-                {
-                    _localOrderBooks.Add(normalizedSymbol, null);
-                }
                 log.Info($"{this.Name}: Getting snapshot {normalizedSymbol} level 2");
 
                 // Fetch initial depth snapshot
                 var depthSnapshot = await _restClient.ExchangeApi.ExchangeData.GetOrderBookAsync(symbol, Precision.PrecisionLevel0, _settings.DepthLevels);
                 if (depthSnapshot.Success)
                 {
-                    _localOrderBooks[normalizedSymbol] = ToOrderBookModel(depthSnapshot.Data, normalizedSymbol);
+                    // The websocket snapshot may already have seeded the book. Keep it: the channel's
+                    // deltas follow that frame. Until a book is stored, the queue consumer drops every
+                    // delta, so a book built from this REST picture misses any change made after the
+                    // picture was taken and before the book was stored.
+                    lock (_bookSeedLock)
+                    {
+                        if (_localOrderBooks.TryGetValue(normalizedSymbol, out var seeded) && seeded != null)
+                        {
+                            log.Info($"{this.Name}: LOB {normalizedSymbol} level 2 already loaded from the websocket snapshot.");
+                            continue;
+                        }
+                        _localOrderBooks[normalizedSymbol] = ToOrderBookModel(depthSnapshot.Data, normalizedSymbol);
+                    }
                     log.Info($"{this.Name}: LOB {normalizedSymbol} level 2 Successfully loaded.");
                 }
                 else
@@ -717,13 +736,34 @@ namespace MarketConnectors.Bitfinex
         }
         private void UpdateOrderBookSnapshot(IEnumerable<BitfinexOrderBookEntry> data, string symbol)
         {
-            // Treat a null value like an absent key: InitializeSnapshotsAsync seeds a null placeholder
-            // until the REST snapshot replaces it, and Bitfinex sends a Snapshot right after subscribing.
-            // A frame in that window used to dereference the placeholder (the production NullReferenceException
-            // storm) and request a reconnect that reopened it; the REST snapshot seeds the book, so drop it.
-            if (!_localOrderBooks.TryGetValue(symbol, out VisualHFT.Model.OrderBook? lob) || lob == null)
+            // An absent key means the symbol is not subscribed (between ClearAsync and the next start): drop it.
+            if (!_localOrderBooks.TryGetValue(symbol, out VisualHFT.Model.OrderBook? lob))
             {
                 return;
+            }
+            // A null value is the empty slot the start registers before subscribing. Bitfinex sends this
+            // Snapshot right after the subscription, and every delta on the channel follows it, so the book
+            // is built from it. Until a book is stored, the queue consumer drops every delta. A book built
+            // only from the REST snapshot therefore misses any change made after that picture was taken and
+            // before the book was stored: a level removed in that gap stays in the book for good, and the
+            // book crosses once the market passes it.
+            if (lob == null)
+            {
+                lock (_bookSeedLock)
+                {
+                    if (!_localOrderBooks.TryGetValue(symbol, out lob))
+                        return;
+                    if (lob == null)
+                    {
+                        var entries = data.ToList();
+                        _localOrderBooks[symbol] = ToOrderBookModel(new BitfinexOrderBook
+                        {
+                            Bids = entries.Where(x => x.Quantity > 0).ToArray(),
+                            Asks = entries.Where(x => x.Quantity < 0).ToArray(),
+                        }, symbol);
+                        return;
+                    }
+                }
             }
             lob.Clear(); //reset order book
 
