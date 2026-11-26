@@ -62,7 +62,24 @@
                     </TextBlock.ToolTip>
             </TextBlock>
             </StackPanel>
-            <TextBox Text="{Binding BucketVolumeSize, ValidatesOnDataErrors=True}" Margin="0,5" />
+            <TextBox Text="{Binding BucketVolumeSize, ValidatesOnDataErrors=True}" Margin="0,5"
+                     IsEnabled="{Binding IsBucketVolumeEditable}" />
+            <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                <CheckBox x:Name="AutoBucketVolumeCheckBox"
+                          Content="Size the bucket automatically"
+                          IsChecked="{Binding AutoBucketVolumeSelection, UpdateSourceTrigger=PropertyChanged}"
+                          VerticalAlignment="Center"/>
+                <TextBlock x:Name="AutoBucketVolumeInfoIcon" Text="&#x2139;&#xFE0F;" Cursor="Hand" Margin="10 0 0 0" VerticalAlignment="Center">
+                    <TextBlock.ToolTip>
+                        <ToolTip MaxWidth="380">
+                            <TextBlock TextWrapping="Wrap">
+                                <Run FontWeight="Bold">Automatic bucket volume</Run><LineBreak/>
+                                <Run>V is 20 times the volume-weighted average size of the first 10,000 trades the study counts: the sum of squared sizes divided by the sum of sizes. On most instruments a few large trades carry most of the volume, so this is the size of trade a unit of volume typically arrives in, and a bucket holds about 20 such trades instead of filling with one. Auction crosses with no side are not counted. The tile shows a dot while those trades arrive, which takes minutes on a busy instrument and can take hours on a thin one; its status shows V once the first value appears. V stays fixed until the study restarts or these settings are saved. If the study starts inside an unusually active stretch, such as an open or a crash, V comes out several times larger and the tile reads low and moves slowly; save the settings once trading is calmer to size it again. Turn it off to type your own V.</Run>
+                            </TextBlock>
+                        </ToolTip>
+                    </TextBlock.ToolTip>
+                </TextBlock>
+            </StackPanel>
 
             <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
                 <Label Content="Number of Buckets" />
@@ -117,10 +134,10 @@
                                 </TextBlock>
                                 <TextBlock TextWrapping="Wrap" Margin="0,10,0,0">
                                     <Run FontWeight="Bold">The tile stays blank until the metric is defined.</Run><LineBreak/>
-                                    <Run>Nothing is shown until a full window of buckets has closed - Bucket Volume Size times Number of Buckets of traded volume, which at the paper's own sizing is roughly one trading day. Nothing is shown either while the bucket volume is too small to hold 20 trades, measured against the median trade size seen on this instrument; below that the reading measures the bucket size rather than the order flow. The log names the bucket volume the instrument calls for.</Run>
+                                    <Run>Nothing is shown until a full window of buckets has closed - Bucket Volume Size times Number of Buckets of traded volume, which at the paper's own sizing is roughly one trading day. Nothing is shown either while the bucket volume is below 20 times the volume-weighted average size of the first 10,000 trades seen on this instrument; below that the reading measures the bucket size rather than the order flow. With a bucket volume you type, nothing is shown until the first 10,000 counted trades have been checked against it. The log names the bucket volume the instrument calls for.</Run>
                                 </TextBlock>
                                 <TextBlock TextWrapping="Wrap" Margin="0,10,0,0">
-                                    <Run FontWeight="Bold">Switching form mid-session does not clear the tile.</Run><LineBreak/><Run>The buckets collected so far are discarded and the new form starts from nothing, but the study is not restarted and the last number the previous form published stays on the tile until the new form has one of its own. After switching to the corrected form that wait is a full window. Treat the displayed value as belonging to the old form until it visibly changes.</Run>
+                                    <Run FontWeight="Bold">Switching form mid-session does not clear the tile.</Run><LineBreak/><Run>The buckets collected so far are discarded and the new form starts from nothing, but the study is not restarted and the last number the previous form published stays on the tile until the new form has one of its own. After switching to the corrected form that wait is a full window. Treat the displayed value as belonging to the old form until it visibly changes. With the automatic bucket volume on, the tile shows a dot from the next trade while the bucket is sized again.</Run>
                                 </TextBlock>
                             </StackPanel>
                         </ToolTip>

@@ -181,6 +181,8 @@ namespace VisualHFT.Studies
             existing.Value = newItem.Value;
             existing.Format = newItem.Format;
             existing.MarketMidPrice = newItem.MarketMidPrice;
+            existing.IsStale = newItem.IsStale;
+            existing.Tooltip = newItem.Tooltip;
 
             base.onDataAggregation(dataCollection, newItem, lastItemAggregationCount);
         }
@@ -216,6 +218,19 @@ namespace VisualHFT.Studies
                 MarketMidPrice = midPrice,
                 Timestamp = HelperTimeProvider.Now
             };
+
+            // Before the first verdict the Neutral above is the default, not a reading: flag it as the platform flags a value
+            // that is not a measurement.
+            if (!_mrBiasCalc.HasBiasVerdict)
+            {
+                newItem.IsStale = true;
+                newItem.Tooltip = "No verdict yet: the arrow waits for the first depth shock with poor resilience";
+            }
+            else if (_mrBiasCalc.IsLastBookCrossed)
+            {
+                newItem.IsStale = true;
+                newItem.Tooltip = "Book crossed: last verdict held";
+            }
 
             AddCalculation(newItem);
         }

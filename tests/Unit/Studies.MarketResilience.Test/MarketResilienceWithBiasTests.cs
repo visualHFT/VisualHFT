@@ -179,6 +179,8 @@ namespace Studies.MarketResilience.Tests
             var seededScore = calc.CurrentMRScore;
             Assert.NotEqual(1m, seededScore);
             Assert.Equal(eMarketBias.Neutral, calc.CurrentMarketBias);
+            // No verdict yet: the Neutral above is the default, not a reading, so the tile shows none.
+            Assert.False(calc.HasBiasVerdict);
 
             // The event under test: the bid is taken out and never comes back.
             calc.OnTrade(LargePrint(100.49m));
@@ -204,6 +206,7 @@ namespace Studies.MarketResilience.Tests
             Assert.True(calc.CurrentMRScore <= 0.30m,
                 $"MR score {calc.CurrentMRScore} should be ≤ 0.30");
             Assert.Equal(eMarketBias.Bearish, calc.CurrentMarketBias);
+            Assert.True(calc.HasBiasVerdict);
         }
 
         /// <summary>

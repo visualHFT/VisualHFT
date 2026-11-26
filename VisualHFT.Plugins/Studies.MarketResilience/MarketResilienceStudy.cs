@@ -218,6 +218,12 @@ namespace VisualHFT.Studies
                 newItem.Tooltip = "Warming up: " + mrCalc.WarmUpProgress + " of " +
                                   MarketResilienceCalculator.WarmUpSamplesRequired + " book updates";
             }
+            else if (mrCalc.IsLastBookCrossed)
+            {
+                newItem.IsStale = true;
+                newItem.ValueColor = "Orange";
+                newItem.Tooltip = "Book crossed: last score held";
+            }
 
             AddCalculation(newItem);
         }

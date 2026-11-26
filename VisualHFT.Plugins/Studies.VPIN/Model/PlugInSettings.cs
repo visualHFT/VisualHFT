@@ -19,6 +19,13 @@ namespace VisualHFT.Studies.VPIN.Model
         /// </summary>
         public bool UseCorrectedForm { get; set; }
 
+        /// <summary>
+        /// Sizes the bucket from the instrument itself: 20 times the volume-weighted average size of the first 10,000 trades
+        /// (the sum of squared sizes divided by the sum of sizes), fixed for the run. On for new settings. A settings file
+        /// written before this option existed reads it as off and keeps its stored bucket volume.
+        /// </summary>
+        public bool AutoBucketVolume { get; set; }
+
         public string Symbol { get; set; }
         public Provider Provider { get; set; }
         public AggregationLevel AggregationLevel { get; set; }
@@ -35,7 +42,7 @@ namespace VisualHFT.Studies.VPIN.Model
                 missing.Add("data provider");
             if (string.IsNullOrEmpty(Symbol))
                 missing.Add("symbol");
-            if (BucketVolSize <= 0)
+            if (!AutoBucketVolume && BucketVolSize <= 0)
                 missing.Add("bucket volume size");
             if (NumberOfBuckets is not > 0)
                 missing.Add("number of buckets");
