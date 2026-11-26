@@ -77,6 +77,18 @@ namespace VisualHFT.Studies
         private VpinBucketEngine? _engine;
         private bool _floorWarningLogged;
 
+        // Automatic bucket volume, read once per reset. Legacy form: two running totals over the first trades give V;
+        // those trades are not bucketed, and the first bucket starts with the next trade. The corrected form's engine
+        // keeps its own. The totals are doubles: a decimal sum of squares overflows once one size passes about 2.8e12.
+        private bool _autoBucketVolume;
+        private int _sampleTarget;
+        private int _sampledCount;
+        private double _sampleSumOfSizes;
+        private double _sampleSumOfSquaredSizes;
+        private string? _bucketTooltip; // the hover that shows V once it is known; built once per run
+        private bool _sizingWaitPublished; // the dot is published once per reset, not once per sampled trade
+        private bool _hasBucketedTrade; // legacy automatic bucket: nothing is published until a trade after the sample is bucketed
+
 
         // Event declaration
         public override event EventHandler<decimal> OnAlertTriggered;
@@ -102,13 +114,16 @@ namespace VisualHFT.Studies
         public override string TileTitle { get; set; } = "VPIN";
         public override string TileToolTip { get; set; } = "<b>VPIN</b> (Volume-Synchronized Probability of Informed Trading) measures order-flow imbalance on a volume clock. Trades are grouped into buckets of equal traded volume. For each bucket we take the volume bought by aggressors minus the volume sold by aggressors, and show the average absolute imbalance over the last n buckets. 0 means every bucket was balanced; 1 means every bucket was one-sided.<br/><br/>" +
                 "<b>It is not a probability, and it is not a warning signal.</b> Andersen and Bondarenko (2014, 2015) showed that the metric's forecasting record came from its original classifier tracking volatility rather than from informed trading. Read it as a description of how one-sided recent flow has been, not as a forecast.<br/><br/>" +
-                "<b>Bucket volume decides the number.</b> Small buckets read high on random flow by arithmetic alone: with four equally sized prints per bucket the average on coin-flip sides is 0.375, with two it is 0.500, and with one it is 1.000. Size the bucket as the instrument's daily volume without its opening and closing auction crosses, divided by 200, and keep the window at 50 buckets: the window then covers about a quarter of the day, and the corrected form shows its first value once a quarter of the day's volume has traded. (The paper divides average daily volume by the number of buckets, so its window covers a whole day.) Aim for at least 20 trades per bucket.<br/><br/>" +
+                "<b>Bucket volume decides the number.</b> Small buckets read high on random flow by arithmetic alone: with four equally sized prints per bucket the average on coin-flip sides is 0.375, with two it is 0.500, and with one it is 1.000. New settings size the bucket automatically, at 20 times the volume-weighted average size of the first 10,000 counted trades (the sum of squared sizes divided by the sum of sizes), so a bucket holds about 20 trades of the size most volume arrives in. The tile shows a dot while those trades arrive; its status shows the bucket volume once the first value appears. On balanced random flow a bucket of that size reads about 0.18. Real flow reads higher and the level differs by instrument, so compare a reading with the same instrument's earlier readings, not with another instrument. If those first trades fall in an unusually active stretch, the bucket comes out larger and the tile reads low and moves slowly until the settings are saved again. To size it yourself, take the instrument's daily volume without its opening and closing auction crosses, divide it by 200, and keep the window at 50 buckets: the window then covers about a quarter of the day, and the corrected form shows its first value once a quarter of the day's volume has traded. (The paper divides average daily volume by the number of buckets, so its window covers a whole day.) Keep the bucket at least 20 times the volume-weighted average trade size.<br/><br/>" +
                 "<b>Corrected form</b> (optional, off by default)<br/>" +
-                "Classifies each trade by the tick rule - a print above the previous print is a buy, below is a sell, unchanged repeats the previous side - which Chakrabarty, Pascual and Shkilko (2015) found more accurate than the paper's own bulk classifier. The paper's method splits a bucket's volume fractionally between the two sides; assigning each whole print to one side can only produce buckets at least as one-sided, so expect this to read higher than a bulk-classified figure on the same tape. That follows from the two constructions - it is not a measurement, and no bulk classifier ships here to compare against. Compare ranks and percentiles rather than published absolute thresholds. No value is shown until a full window of buckets has closed, and none is shown while the bucket volume is too small to hold 20 trades.<br/><br/>" +
+                "Classifies each trade by the tick rule - a print above the previous print is a buy, below is a sell, unchanged repeats the previous side - which Chakrabarty, Pascual and Shkilko (2015) found more accurate than the paper's own bulk classifier. The paper's method splits a bucket's volume fractionally between the two sides; assigning each whole print to one side can only produce buckets at least as one-sided, so expect this to read higher than a bulk-classified figure on the same tape. That follows from the two constructions - it is not a measurement, and no bulk classifier ships here to compare against. Compare ranks and percentiles rather than published absolute thresholds. No value is shown until a full window of buckets has closed, and none is shown while the bucket volume is below 20 times the volume-weighted average trade size. With a bucket volume you type, nothing is shown until the first 10,000 counted trades have been checked against it.<br/><br/>" +
                 "<b>Legacy form</b> (default)<br/>" +
                 "Classifies each trade against the order-book mid price, starts averaging from the first completed bucket instead of waiting for a full window, and accepts any positive bucket volume. It is the default only so that an existing settings file keeps the behaviour it already had.";
 
-        public decimal BucketVolumeSize => _bucketVolumeSize;
+        public decimal BucketVolumeSize => _engine?.BucketVolumeSize ?? _bucketVolumeSize;
+
+        // Trades sampled to size the bucket and its floor, read once per reset. It can be lowered before the study starts.
+        internal int PrintSizeSampleCount { get; set; } = VpinBucketEngine.DefaultPrintSizeSampleCount;
 
         public VPINStudy()
         {
@@ -174,7 +189,7 @@ namespace VisualHFT.Studies
                     return;
                 }
 
-                if (_bucketVolumeSize == 0)
+                if (_bucketVolumeSize == 0 && !_autoBucketVolume)
                     _bucketVolumeSize = (decimal)_settings.BucketVolSize;
 
                 // Quote rule: classify using a mid price
@@ -196,56 +211,143 @@ namespace VisualHFT.Studies
                 else
                     return; // No classification possible
 
-                decimal remainingSize = e.Size;
-
-                // Assign entire trade to buy or sell for the current bucket portion
-                if (isBuy)
-                    _currentBuyVolume += remainingSize;
-                else
-                    _currentSellVolume += remainingSize;
-                _currentBucketVolume += remainingSize;
-
-                // Only the last n buckets can stay in an n-bucket window. When this trade closes more than n, every one of
-                // the last n holds this trade alone, so the buckets before them are skipped instead of closed and evicted:
-                // the same final value, and at most n bucket closes for one trade however large it is.
-                if (_bucketVolumeSize > 0 && _currentBucketVolume >= _bucketVolumeSize)
+                if (_autoBucketVolume && _bucketVolumeSize == 0)
                 {
-                    decimal skipped = decimal.Floor(_currentBucketVolume / _bucketVolumeSize) - _bucketImbalances.Length;
-                    if (skipped > 0)
-                    {
-                        _currentBucketVolume -= skipped * _bucketVolumeSize;
-                        _currentBuyVolume = isBuy ? _currentBucketVolume : 0;
-                        _currentSellVolume = isBuy ? 0 : _currentBucketVolume;
-                    }
+                    SampleForSizing(e.Size);
+                    return;
                 }
 
-                // Complete as many buckets as this trade fills
-                while (_currentBucketVolume >= _bucketVolumeSize && _bucketVolumeSize > 0)
-                {
-                    decimal bucketOverflow = _currentBucketVolume - _bucketVolumeSize;
-
-                    // Trim the overflow from whichever side received it
-                    if (isBuy)
-                        _currentBuyVolume -= bucketOverflow;
-                    else
-                        _currentSellVolume -= bucketOverflow;
-                    _currentBucketVolume = _bucketVolumeSize;
-
-                    DoCalculation(true); // Bucket completed
-
-                    // Start new bucket with the overflow
-                    _currentBuyVolume = 0;
-                    _currentSellVolume = 0;
-                    if (isBuy)
-                        _currentBuyVolume = bucketOverflow;
-                    else
-                        _currentSellVolume = bucketOverflow;
-                    _currentBucketVolume = bucketOverflow;
-                }
-
+                // Set before bucketing: a trade that closes a bucket records it through DoCalculation.
+                if (e.Size > 0)
+                    _hasBucketedTrade = true;
+                AddToBuckets(e.Size, isBuy);
                 DoCalculation(false); // Interim update with current state
             }
         }
+
+        // Caller must hold _lockBucket.
+        private void AddToBuckets(decimal remainingSize, bool isBuy)
+        {
+            // Assign entire trade to buy or sell for the current bucket portion
+            if (isBuy)
+                _currentBuyVolume += remainingSize;
+            else
+                _currentSellVolume += remainingSize;
+            _currentBucketVolume += remainingSize;
+
+            // Only the last n buckets can stay in an n-bucket window. When this trade closes more than n, every one of
+            // the last n holds this trade alone, so the buckets before them are skipped instead of closed and evicted:
+            // the same final value, and at most n bucket closes for one trade however large it is.
+            if (_bucketVolumeSize > 0 && _currentBucketVolume >= _bucketVolumeSize)
+            {
+                decimal skipped = decimal.Floor(_currentBucketVolume / _bucketVolumeSize) - _bucketImbalances.Length;
+                if (skipped > 0)
+                {
+                    _currentBucketVolume -= skipped * _bucketVolumeSize;
+                    _currentBuyVolume = isBuy ? _currentBucketVolume : 0;
+                    _currentSellVolume = isBuy ? 0 : _currentBucketVolume;
+                }
+            }
+
+            // Complete as many buckets as this trade fills
+            while (_currentBucketVolume >= _bucketVolumeSize && _bucketVolumeSize > 0)
+            {
+                decimal bucketOverflow = _currentBucketVolume - _bucketVolumeSize;
+
+                // Trim the overflow from whichever side received it
+                if (isBuy)
+                    _currentBuyVolume -= bucketOverflow;
+                else
+                    _currentSellVolume -= bucketOverflow;
+                _currentBucketVolume = _bucketVolumeSize;
+
+                DoCalculation(true); // Bucket completed
+
+                // Start new bucket with the overflow
+                _currentBuyVolume = 0;
+                _currentSellVolume = 0;
+                if (isBuy)
+                    _currentBuyVolume = bucketOverflow;
+                else
+                    _currentSellVolume = bucketOverflow;
+                _currentBucketVolume = bucketOverflow;
+            }
+        }
+
+        /// <summary>
+        /// Legacy form, automatic bucket volume. Adds the trade to the sample's running totals; at the last sampled trade
+        /// sets V = 20 x the volume-weighted average trade size (the sum of squared sizes divided by the sum of sizes).
+        /// The sampled trades are not bucketed: the first bucket starts with the next trade. V then stays fixed until the
+        /// next reset.
+        /// </summary>
+        private void SampleForSizing(decimal size)
+        {
+            // Caller must hold _lockBucket.
+            // A trade with no size is no sample of the trade size.
+            if (_sampleTarget <= 0 || size <= 0)
+                return;
+
+            double q = (double)size;
+            _sampleSumOfSizes += q;
+            _sampleSumOfSquaredSizes += q * q;
+            if (++_sampledCount < _sampleTarget)
+            {
+                PublishSizingWait(_sampleTarget);
+                return;
+            }
+
+            // The tile keeps its dot until the next trade is bucketed; V reaches the status with that first value.
+            _bucketVolumeSize = VpinBucketEngine.DefaultMinimumPrintsPerBucket * VpinBucketEngine.VolumeWeightedSize(_sampleSumOfSizes, _sampleSumOfSquaredSizes);
+            _bucketTooltip = BucketVolumeTooltip(_bucketVolumeSize, _sampledCount);
+        }
+
+        private static string BucketVolumeTooltip(decimal bucketVolume, int sampleCount) =>
+            $"Bucket volume: {SixDigits(bucketVolume)}, {VpinBucketEngine.DefaultMinimumPrintsPerBucket} times the volume-weighted average size of the first {sampleCount} trades.";
+
+        // For display: six significant digits below 1,000,000, every integer digit from there up, never in exponent form (G6
+        // writes 1234567 as 1.23457E+06). The stored value stays exact.
+        private static string SixDigits(decimal v)
+        {
+            if (v == 0m)
+                return "0";
+            int intDigits = (int)Math.Floor(Math.Log10((double)Math.Abs(v))) + 1;
+            int decimals = Math.Clamp(6 - intDigits, 0, 28);
+            return Math.Round(v, decimals, MidpointRounding.AwayFromZero).ToString("0.############################");
+        }
+
+        // Caller must hold _lockBucket. One dot per reset: the tile shows the waiting text, not this one, so a model per sampled
+        // trade would only allocate on the trade path. It counts only once published: a trade that arrives before the study
+        // is started is sampled, but its model is dropped.
+        private void PublishSizingWait(int sampleCount, bool checkingHandBucket = false)
+        {
+            if (_sizingWaitPublished)
+                return;
+            _sizingWaitPublished = PublishWaiting(checkingHandBucket
+                ? $"Checking the bucket volume against the first {sampleCount} trades"
+                : $"Sizing bucket from the first {sampleCount} trades");
+        }
+
+        /// <summary>
+        /// A model with no value: the tile shows "." and the reason. It skips aggregation, which would otherwise copy
+        /// its unset value into the last item as a 0.
+        /// </summary>
+        private bool PublishWaiting(string reason)
+        {
+            // Caller must hold _lockBucket.
+            if (Status != VisualHFT.PluginManager.ePluginStatus.STARTED)
+                return false;
+
+            var marker = new BaseStudyModel();
+            marker.Format = ValueFormat;
+            marker.Timestamp = HelperTimeProvider.Now;
+            marker.ValueColor = colorWhite;
+            marker.Tooltip = reason;
+            marker.AddItemSkippingAggregation = true;
+
+            AddCalculation(marker);
+            return true;
+        }
+
         // Span scan of the whole tokens in Trade.Flags, no allocation.
         private static bool HasNoAggressorToken(string flags)
         {
@@ -312,7 +414,28 @@ namespace VisualHFT.Studies
             if (Status != VisualHFT.PluginManager.ePluginStatus.STARTED)
                 return;
 
+            bool wasSizing = _engine.IsSizingBucket;
             _engine.AddTrade(e.Price, e.Size);
+
+            if (_engine.IsSizingBucket)
+            {
+                PublishSizingWait(_engine.PrintSizeSampleCount);
+                return;
+            }
+            if (_engine.IsCheckingFloor)
+            {
+                // A typed V: nothing is publishable until the sample has checked it against the floor.
+                PublishSizingWait(_engine.PrintSizeSampleCount, checkingHandBucket: true);
+                return;
+            }
+            if (wasSizing)
+            {
+                // V is known now. Until the window is full the tile keeps its dot (a model with no value shows the
+                // waiting text, not its own); V reaches the status with the first published value.
+                _bucketTooltip = BucketVolumeTooltip(_engine.BucketVolumeSize, _engine.PrintSizeSampleCount);
+                if (!_engine.HasPublishableValue)
+                    PublishWaiting(_bucketTooltip);
+            }
 
             if (!_engine.BucketJustClosed)
                 return;
@@ -329,6 +452,7 @@ namespace VisualHFT.Studies
             newItem.Timestamp = HelperTimeProvider.Now;
             newItem.MarketMidPrice = _lastMarketMidPrice;
             newItem.ValueColor = colorGreen;
+            newItem.Tooltip = _bucketTooltip;
             newItem.AddItemSkippingAggregation = true;
 
             AddCalculation(newItem);
@@ -343,8 +467,8 @@ namespace VisualHFT.Studies
             _floorWarningLogged = true;
             log.Warn(
                 $"{this.Name}: bucket volume size {_engine.BucketVolumeSize} is too small for {_settings.Symbol}. " +
-                $"The median trade size observed is {_engine.MedianPrintSize}, so a bucket holding " +
-                $"{_engine.MinimumPrintsPerBucket} trades needs at least {_engine.RequiredBucketVolumeSize}. " +
+                $"The volume-weighted average trade size observed is {SixDigits(_engine.VolumeWeightedPrintSize)}, so a bucket holding " +
+                $"{_engine.MinimumPrintsPerBucket} trades needs at least {SixDigits(_engine.RequiredBucketVolumeSize)}. " +
                 "Below that the reading measures the bucket size rather than the order flow, so no value is published.");
         }
         /// <summary>
@@ -356,6 +480,7 @@ namespace VisualHFT.Studies
             // Caller must hold _lockBucket
             if (_useCorrectedForm) return;
             if (Status != VisualHFT.PluginManager.ePluginStatus.STARTED) return;
+            if (_autoBucketVolume && !_hasBucketedTrade) return; // still sizing, or no trade bucketed since: the tile keeps its dot
             string valueColor = isNewBucket ? colorGreen : colorWhite;
 
             if (isNewBucket && _bucketVolumeSize > 0)
@@ -385,6 +510,7 @@ namespace VisualHFT.Studies
             newItem.Timestamp = HelperTimeProvider.Now;
             newItem.MarketMidPrice = _lastMarketMidPrice;
             newItem.ValueColor = valueColor;
+            newItem.Tooltip = _bucketTooltip;
             newItem.AddItemSkippingAggregation = isNewBucket;
 
             AddCalculation(newItem);
@@ -411,12 +537,28 @@ namespace VisualHFT.Studies
                 _floorWarningLogged = false;
                 _engine = null;
                 _useCorrectedForm = _settings?.UseCorrectedForm == true;
-                if (_useCorrectedForm)
+
+                // The automatic bucket volume is sized again from the next trades, here and only here.
+                _autoBucketVolume = _settings?.AutoBucketVolume == true;
+                _bucketTooltip = null;
+                _sizingWaitPublished = false;
+                _hasBucketedTrade = false;
+                int sampleCount = PrintSizeSampleCount;
+                _sampleTarget = _autoBucketVolume && !_useCorrectedForm ? sampleCount : 0;
+                _sampledCount = 0;
+                _sampleSumOfSizes = 0d;
+                _sampleSumOfSquaredSizes = 0d;
+
+                if (_useCorrectedForm && _autoBucketVolume)
+                {
+                    _engine = VpinBucketEngine.CreateAutoSized(n, printSizeSampleCount: sampleCount);
+                }
+                else if (_useCorrectedForm)
                 {
                     // The dialog rejects a non-positive bucket volume, but a settings file edited by
                     // hand or written by an older build does not go through the dialog.
                     if (_settings!.BucketVolSize > 0)
-                        _engine = new VpinBucketEngine((decimal)_settings.BucketVolSize, n);
+                        _engine = new VpinBucketEngine((decimal)_settings.BucketVolSize, n, printSizeSampleCount: sampleCount);
                     else
                         log.Warn($"{this.Name}: the corrected form is selected but the bucket volume size is {_settings.BucketVolSize}. " +
                                  "It must be greater than zero. No value will be published until it is set.");
@@ -440,6 +582,7 @@ namespace VisualHFT.Studies
             existing.Value = newItem.Value;
             existing.Format = newItem.Format;
             existing.MarketMidPrice = newItem.MarketMidPrice;
+            existing.Tooltip = newItem.Tooltip;
 
             base.onDataAggregation(dataCollection, newItem, lastItemAggregationCount);
         }
@@ -487,7 +630,8 @@ namespace VisualHFT.Studies
         {
             _settings = new PlugInSettings()
             {
-                BucketVolSize = 1,
+                BucketVolSize = 0,
+                AutoBucketVolume = true,
                 NumberOfBuckets = DEFAULT_NUMBER_OF_BUCKETS,
                 Symbol = "",
                 Provider = new ViewModel.Model.Provider(),
@@ -502,6 +646,7 @@ namespace VisualHFT.Studies
             viewModel.BucketVolumeSize = _settings.BucketVolSize;
             viewModel.NumberOfBuckets = _settings.NumberOfBuckets ?? DEFAULT_NUMBER_OF_BUCKETS;
             viewModel.UseCorrectedFormSelection = _settings.UseCorrectedForm;
+            viewModel.AutoBucketVolumeSelection = _settings.AutoBucketVolume;
             viewModel.SelectedSymbol = _settings.Symbol;
             viewModel.SelectedProviderID = _settings.Provider.ProviderID;
             viewModel.AggregationLevelSelection = _settings.AggregationLevel;
@@ -511,6 +656,7 @@ namespace VisualHFT.Studies
                 _settings.BucketVolSize = viewModel.BucketVolumeSize;
                 _settings.NumberOfBuckets = viewModel.NumberOfBuckets;
                 _settings.UseCorrectedForm = viewModel.UseCorrectedFormSelection;
+                _settings.AutoBucketVolume = viewModel.AutoBucketVolumeSelection;
                 _settings.Symbol = viewModel.SelectedSymbol;
                 _settings.Provider = viewModel.SelectedProvider;
                 _settings.AggregationLevel = viewModel.AggregationLevelSelection;

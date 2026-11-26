@@ -22,6 +22,7 @@ namespace VisualHFT.Studies.VPIN.ViewModel
         private string _selectedSymbol;
         private AggregationLevel _aggregationLevelSelection;
         private bool _useCorrectedFormSelection;
+        private bool _autoBucketVolumeSelection;
 
 
         private string _validationMessage;
@@ -139,6 +140,26 @@ namespace VisualHFT.Studies.VPIN.ViewModel
         }
 
 
+        /// <summary>
+        /// Sizes the bucket automatically: 20 times the volume-weighted average size of the first 10,000 trades, fixed for
+        /// the run. While it is on, the Bucket Volume Size box is not used and may be left at zero.
+        /// </summary>
+        public bool AutoBucketVolumeSelection
+        {
+            get => _autoBucketVolumeSelection;
+            set
+            {
+                _autoBucketVolumeSelection = value;
+                OnPropertyChanged(nameof(AutoBucketVolumeSelection));
+                OnPropertyChanged(nameof(IsBucketVolumeEditable));
+                OnPropertyChanged(nameof(BucketVolumeSize)); // re-runs its validation
+                RaiseCanExecuteChanged();
+            }
+        }
+
+        public bool IsBucketVolumeEditable => !_autoBucketVolumeSelection;
+
+
         public string ValidationMessage
         {
             get { return _validationMessage; }
@@ -159,7 +180,7 @@ namespace VisualHFT.Studies.VPIN.ViewModel
                 switch (columnName)
                 {
                     case nameof(BucketVolumeSize):
-                        if (BucketVolumeSize <= 0)
+                        if (!AutoBucketVolumeSelection && BucketVolumeSize <= 0)
                             return "Bucket Volume Size must be greater than zero.";
                         break;
                     case nameof(NumberOfBuckets):

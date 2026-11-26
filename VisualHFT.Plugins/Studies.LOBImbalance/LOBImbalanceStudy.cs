@@ -24,6 +24,7 @@ namespace VisualHFT.Studies
         private double _lobImbalance = 0;
         private double _lobMidPrice = 0;
         private P2Quantile _spreadMedian = new P2Quantile(0.5);
+        internal P2Quantile SpreadMedianForTests => _spreadMedian;
 
         // Event declaration
         public override event EventHandler<decimal> OnAlertTriggered;
@@ -102,7 +103,7 @@ namespace VisualHFT.Studies
                 _spreadMedian.Observe(currentSpread);
             double spreadScale = SpreadScaleResolver.Resolve(e.PriceDecimalPlaces, currentSpread, _spreadMedian.Count, _spreadMedian.Estimate);
 
-            // The imbalance is undefined when a side is empty or the captured sizes sum to zero.
+            // The imbalance is undefined when a side is empty, the book is crossed or locked, or the captured sizes sum to zero.
             // NaN marks it, and the model then goes out with no value instead of a 0 that reads
             // as a balanced book.
             var bids = e.Bids;
@@ -110,7 +111,7 @@ namespace VisualHFT.Studies
             int bidsCount = bids?.Count() ?? 0;
             int asksCount = asks?.Count() ?? 0;
             _lobImbalance = double.NaN;
-            if (bidsCount > 0 && asksCount > 0)
+            if (bidsCount > 0 && asksCount > 0 && currentSpread > 0)
             {
                 double imbalance = ImbalanceCalculator.Calculate(bids, asks, e.MaxDepth, _settings.Weighting, spreadScale);
                 // The calculator also returns 0 for a zero total. A 0 with size on the bid side is a

@@ -42,9 +42,10 @@ namespace Studies.MarketResilience.Model
 
 
         // ---------- STATE ----------
-        // Spread carried over from the previous update. It is the fallback used when the current
-        // book is locked or crossed and reports a non-positive spread. Per-event baselines live in
-        // _activeDepth, not here.
+        // Spread carried over from the previous update. IsLOBDepleted falls back to it when the book
+        // it is given is locked or crossed and reports a non-positive spread. OnOrderBookUpdate returns
+        // before that on such a book, so only a direct caller of IsLOBDepleted reaches the fallback.
+        // Per-event baselines live in _activeDepth, not here.
         protected double _previousSpread = 0;
         protected eLOBSIDE _lastReportedDepletion = eLOBSIDE.NONE;
 
@@ -128,6 +129,9 @@ namespace Studies.MarketResilience.Model
 
         public decimal CurrentMRScore { get; private set; } = 1m; // stable MR value by default
         public eMarketBias CurrentMarketBias { get; private set; } = eMarketBias.Neutral;
+
+        // False until a scored event gives a bias: before that CurrentMarketBias is the default Neutral, not a reading.
+        public bool HasBiasVerdict { get; private set; }
         public decimal MidMarketPrice => _lastMidPrice ?? 0;
 
         /// <summary>Book samples the depletion detector needs before it reports anything.</summary>
@@ -138,6 +142,10 @@ namespace Studies.MarketResilience.Model
 
         /// <summary>Book samples consumed so far, capped at the number required.</summary>
         public int WarmUpProgress => Math.Min(Volatile.Read(ref _samplesDepth), WARMUP_MIN_SAMPLES);
+
+        /// <summary>True while the latest book was crossed or locked: the score is the last one computed, held, not a reading.</summary>
+        public bool IsLastBookCrossed => Volatile.Read(ref _lastBookCrossed);
+        private bool _lastBookCrossed;
 
         /// <summary>True once at least one recovery has been measured, so a later one has something to be compared to.</summary>
         public bool HasRecoveryReference
@@ -165,6 +173,11 @@ namespace Studies.MarketResilience.Model
 
         public void OnTrade(Trade trade)
         {
+            // A print with no taker (an auction cross) is not a market order hitting the book: it anchors no shock and stays out
+            // of the trade-size statistics.
+            if (!trade.IsBuy.HasValue && HasNoAggressorToken(trade.Flags))
+                return;
+
             lock (_syncLock)
             {
                 var now = HelperTimeProvider.Now;
@@ -201,13 +214,43 @@ namespace Studies.MarketResilience.Model
                 }
             }
         }
+        // Whole tokens in Trade.Flags, a comma- or space-separated list. Span scan, no allocation.
+        private const string NoAggressorToken = "no-aggressor";
+
+        private static bool HasNoAggressorToken(string flags)
+        {
+            if (string.IsNullOrEmpty(flags))
+                return false;
+
+            ReadOnlySpan<char> rest = flags;
+            while (!rest.IsEmpty)
+            {
+                int end = rest.IndexOfAny(',', ' ');
+                ReadOnlySpan<char> token = end < 0 ? rest : rest.Slice(0, end);
+                if (token.SequenceEqual(NoAggressorToken))
+                    return true;
+
+                rest = end < 0 ? ReadOnlySpan<char>.Empty : rest.Slice(end + 1);
+            }
+
+            return false;
+        }
+
         public void OnOrderBookUpdate(OrderBookSnapshot orderBook)
         {
             lock (_syncLock)
             {
+                // A crossed or locked book (a pre-open, a halt, or a feed out of sync) has no spread or mid a recovery can be
+                // measured against.
                 if (orderBook.Asks == null || orderBook.Bids == null
                     || orderBook.Asks.Length == 0 || orderBook.Bids.Length == 0)
                     return;
+                if (orderBook.Spread <= 0)
+                {
+                    Volatile.Write(ref _lastBookCrossed, true);
+                    return;
+                }
+                Volatile.Write(ref _lastBookCrossed, false);
 
                 var now = HelperTimeProvider.Now;
                 ReleaseExpiredAnchor(now);
@@ -549,8 +592,11 @@ namespace Studies.MarketResilience.Model
             // Its result is committed only alongside a published score, so a withheld event leaves
             // both outputs exactly as they were.
             eMarketBias? bias = CalculateMRBias();
-            if (publish)
-                CurrentMarketBias = bias ?? CurrentMarketBias;
+            if (publish && bias.HasValue)
+            {
+                CurrentMarketBias = bias.Value;
+                HasBiasVerdict = true;
+            }
         }
 
         //DEPLETION FUNCTIONALITY USAGE:
@@ -668,7 +714,8 @@ namespace Studies.MarketResilience.Model
                 _lastReportedDepletion = depleted;
             }
 
-            // 6) Carry this book's spread forward for the next update's locked-book fallback
+            // 6) Carry this book's spread forward for the locked-book fallback in step 1, which only a direct
+            //    caller reaches: OnOrderBookUpdate skips a locked or crossed book before calling this.
             _previousSpread = lob.Spread;
             return newDepletion;
         }
@@ -887,8 +934,8 @@ namespace Studies.MarketResilience.Model
                 // cache the most recently observed book, not event state. Clearing them here made
                 // every scored event publish a mid price of zero, and left the next trade with no
                 // bid/ask to locate itself against.
-                // NOTE: _previousSpread intentionally kept — it is the locked-book spread fallback
-                // used by IsLOBDepleted across cycles.
+                // NOTE: _previousSpread intentionally kept — IsLOBDepleted's locked-book spread fallback
+                // reads it across cycles (only for a direct caller: OnOrderBookUpdate skips such a book).
             }
         }
 

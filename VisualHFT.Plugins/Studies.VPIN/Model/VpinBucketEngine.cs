@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 
 namespace VisualHFT.Studies.VPIN.Model
 {
@@ -43,8 +42,17 @@ namespace VisualHFT.Studies.VPIN.Model
     /// on, and on coin-flip sides its expected value is 1.000 at B = 1, 0.500 at B = 2 and 0.375 at
     /// B = 4, falling toward zero only as B grows. A bucket small enough to hold one print therefore
     /// reads 1 forever on random flow, by arithmetic and not by measurement. The engine samples the
-    /// first prints it sees, takes their median size, and refuses to publish while the configured
-    /// bucket volume is below <see cref="MinimumPrintsPerBucket"/> times that median.
+    /// first prints it classifies, takes their volume-weighted average size (the sum of squared sizes
+    /// divided by the sum of sizes), and refuses to publish while the configured bucket volume is below
+    /// <see cref="MinimumPrintsPerBucket"/> times that size. Weighting by volume measures the size of trade
+    /// a unit of volume typically arrives in, so a few large prints cannot fill a bucket on their own; with
+    /// equal sizes it is the plain size.
+    ///
+    /// AUTOMATIC BUCKET VOLUME
+    /// <see cref="CreateAutoSized"/> sets the bucket volume to exactly that floor: it keeps two running totals over the
+    /// sampled prints, takes V from the same statistic, and starts the first bucket with the next print. The sampled
+    /// prints size the bucket and are not bucketed. V and the floor are one stored value, and V stays fixed for the
+    /// life of the engine.
     ///
     /// WARM-UP
     /// The paper defines the metric only over a full window, so nothing is publishable until n
@@ -69,13 +77,13 @@ namespace VisualHFT.Studies.VPIN.Model
         public const int DefaultMinimumPrintsPerBucket = 20;
 
         /// <summary>
-        /// Prints sampled before the median print size — and with it the bucket volume floor — is
-        /// settled. Fixed and small: the list is allocated once, filled once, sorted once and then
-        /// released, so the sizing costs nothing per print after the sample closes.
+        /// Prints sampled before the volume-weighted print size, and with it the bucket volume floor, is
+        /// settled. The sample is two running totals, so the sizing allocates nothing and costs nothing per
+        /// print after the sample closes.
         /// </summary>
-        public const int DefaultPrintSizeSampleCount = 100;
+        public const int DefaultPrintSizeSampleCount = 10_000;
 
-        private readonly decimal _bucketVolumeSize;
+        private decimal _bucketVolumeSize;
         private readonly int _minimumPrintsPerBucket;
         private readonly int _printSizeSampleCount;
 
@@ -94,18 +102,23 @@ namespace VisualHFT.Studies.VPIN.Model
         private bool _lastSideIsBuy;
         private bool _hasLastSide;
 
-        private List<decimal>? _printSizeSample;
-        private decimal _medianPrintSize;
+        // The sample is two running totals in double: a decimal sum of squares overflows once one size passes about 2.8e12.
+        private double _sampleSumOfSizes;
+        private double _sampleSumOfSquaredSizes;
+        private int _sampledCount;
+        private decimal _volumeWeightedPrintSize;
+        private decimal _requiredBucketVolumeSize;
         private bool _isFloorResolved;
+        private readonly bool _isAutoSized;
 
         /// <param name="bucketVolumeSize">Traded volume V that closes a bucket. Must be positive.</param>
         /// <param name="windowSize">Number of completed buckets n averaged into the value. Must be positive.</param>
         /// <param name="minimumPrintsPerBucket">
-        /// Prints the bucket volume must be able to hold, measured against the median print size.
+        /// Prints the bucket volume must be able to hold, measured against the volume-weighted print size.
         /// Zero switches the floor off, which is useful when the caller has already sized V from a
         /// known volume profile and wants no sampling delay.
         /// </param>
-        /// <param name="printSizeSampleCount">Prints sampled to settle the median print size.</param>
+        /// <param name="printSizeSampleCount">Prints sampled to settle the volume-weighted print size.</param>
         public VpinBucketEngine(
             decimal bucketVolumeSize,
             int windowSize,
@@ -125,15 +138,50 @@ namespace VisualHFT.Studies.VPIN.Model
             _minimumPrintsPerBucket = minimumPrintsPerBucket;
             _printSizeSampleCount = printSizeSampleCount;
             _bucketImbalances = new decimal[windowSize];
-
-            if (minimumPrintsPerBucket > 0)
-                _printSizeSample = new List<decimal>(printSizeSampleCount);
-            else
-                _isFloorResolved = true;
+            _isFloorResolved = minimumPrintsPerBucket == 0;
         }
 
-        /// <summary>Traded volume that closes a bucket.</summary>
+        /// <summary>
+        /// An engine that sizes its own bucket: V = <paramref name="printsPerBucket"/> times the volume-weighted average size
+        /// of the first <paramref name="printSizeSampleCount"/> classified prints. Those prints size the bucket and are not
+        /// bucketed; the first bucket starts with the next classified print.
+        /// </summary>
+        public static VpinBucketEngine CreateAutoSized(
+            int windowSize,
+            int printsPerBucket = DefaultMinimumPrintsPerBucket,
+            int printSizeSampleCount = DefaultPrintSizeSampleCount)
+        {
+            if (windowSize <= 0)
+                throw new ArgumentOutOfRangeException(nameof(windowSize), "Window size must be positive.");
+            if (printsPerBucket <= 0)
+                throw new ArgumentOutOfRangeException(nameof(printsPerBucket), "Prints per bucket must be positive.");
+            if (printSizeSampleCount <= 0)
+                throw new ArgumentOutOfRangeException(nameof(printSizeSampleCount), "Print size sample count must be positive.");
+            return new VpinBucketEngine(windowSize, printsPerBucket, printSizeSampleCount);
+        }
+
+        private VpinBucketEngine(int windowSize, int printsPerBucket, int printSizeSampleCount)
+        {
+            _minimumPrintsPerBucket = printsPerBucket;
+            _printSizeSampleCount = printSizeSampleCount;
+            _bucketImbalances = new decimal[windowSize];
+            _isAutoSized = true;
+        }
+
+        /// <summary>Traded volume that closes a bucket. Zero while an automatic bucket is still being sized.</summary>
         public decimal BucketVolumeSize => _bucketVolumeSize;
+
+        /// <summary>True while an automatic bucket is still being sized; the prints sampled meanwhile are not bucketed.</summary>
+        public bool IsSizingBucket => _isAutoSized && !_isFloorResolved;
+
+        /// <summary>True while a bucket volume set by hand waits for the sample that checks it against the floor; nothing is publishable until then.</summary>
+        public bool IsCheckingFloor => !_isAutoSized && !_isFloorResolved;
+
+        /// <summary>Classified prints sampled so far toward the floor, up to <see cref="PrintSizeSampleCount"/>.</summary>
+        public int SampledPrintCount => _isFloorResolved ? _printSizeSampleCount : _sampledCount;
+
+        /// <summary>Prints sampled to settle the volume-weighted print size.</summary>
+        public int PrintSizeSampleCount => _printSizeSampleCount;
 
         /// <summary>Completed buckets averaged into the value once the window is full.</summary>
         public int WindowSize => _bucketImbalances.Length;
@@ -160,15 +208,16 @@ namespace VisualHFT.Studies.VPIN.Model
         public decimal WarmUpVolumeRequired => _bucketImbalances.Length * _bucketVolumeSize;
 
         /// <summary>
-        /// Median print size over the sample, or zero while the sample is still filling. Reported so
-        /// the caller can tell the user what bucket volume the instrument actually calls for.
+        /// Volume-weighted average print size over the sample (the sum of squared sizes divided by the sum of
+        /// sizes), or zero while the sample is still filling. Reported so the caller can tell the user what
+        /// bucket volume the instrument actually calls for.
         /// </summary>
-        public decimal MedianPrintSize => _medianPrintSize;
+        public decimal VolumeWeightedPrintSize => _volumeWeightedPrintSize;
 
         /// <summary>
         /// Smallest bucket volume that clears the floor, or zero while the sample is still filling.
         /// </summary>
-        public decimal RequiredBucketVolumeSize => _isFloorResolved ? _minimumPrintsPerBucket * _medianPrintSize : 0m;
+        public decimal RequiredBucketVolumeSize => _isFloorResolved ? _requiredBucketVolumeSize : 0m;
 
         /// <summary>
         /// True when the sample has settled and the configured bucket volume is too small to hold
@@ -217,8 +266,24 @@ namespace VisualHFT.Studies.VPIN.Model
             _lastSideIsBuy = isBuy;
             _hasLastSide = true;
 
-            SamplePrintSize(size);
+            if (!_isFloorResolved)
+            {
+                SamplePrintSize(size);
+                if (_isAutoSized)
+                {
+                    // The sampled prints size the bucket and are not bucketed: the first bucket starts with the next print.
+                    // Every sampled size is positive (the check above drops the rest), so V is positive.
+                    if (_isFloorResolved)
+                        _bucketVolumeSize = _requiredBucketVolumeSize;
+                    return;
+                }
+            }
 
+            BucketPrint(size, isBuy);
+        }
+
+        private void BucketPrint(decimal size, bool isBuy)
+        {
             if (isBuy)
                 _currentBuyVolume += size;
             else
@@ -338,32 +403,23 @@ namespace VisualHFT.Studies.VPIN.Model
 
         private void SamplePrintSize(decimal size)
         {
-            if (_printSizeSample == null)
+            double q = (double)size;
+            _sampleSumOfSizes += q;
+            _sampleSumOfSquaredSizes += q * q;
+            if (++_sampledCount < _printSizeSampleCount)
                 return;
 
-            _printSizeSample.Add(size);
-            if (_printSizeSample.Count < _printSizeSampleCount)
-                return;
-
-            _printSizeSample.Sort();
-            _medianPrintSize = Median(_printSizeSample);
+            // The floor is stored once, so an automatic V set from it can never fall below it by rounding.
+            _volumeWeightedPrintSize = VolumeWeightedSize(_sampleSumOfSizes, _sampleSumOfSquaredSizes);
+            _requiredBucketVolumeSize = _minimumPrintsPerBucket * _volumeWeightedPrintSize;
             _isFloorResolved = true;
-            _printSizeSample = null;
         }
 
         /// <summary>
-        /// Median of a pre-sorted list: the middle value, or the mean of the two middle values when
-        /// the count is even. Equivalent to the linear-interpolation 50th percentile.
+        /// The volume-weighted average size, sum(q^2) / sum(q), from a sample's two running totals. The ratio is converted to
+        /// decimal once. Zero when the sizes sum to zero.
         /// </summary>
-        private static decimal Median(List<decimal> sortedValues)
-        {
-            int count = sortedValues.Count;
-            if (count == 0)
-                return 0m;
-            int middle = count / 2;
-            return (count % 2 != 0)
-                ? sortedValues[middle]
-                : (sortedValues[middle - 1] + sortedValues[middle]) / 2m;
-        }
+        internal static decimal VolumeWeightedSize(double sumOfSizes, double sumOfSquaredSizes) =>
+            sumOfSizes > 0d ? (decimal)(sumOfSquaredSizes / sumOfSizes) : 0m;
     }
 }
